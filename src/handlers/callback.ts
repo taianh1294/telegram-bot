@@ -8,7 +8,7 @@ import type { Context } from "grammy";
 import { unlinkSync } from "fs";
 import { session } from "../session";
 import { ALLOWED_USERS } from "../config";
-import { isAuthorized } from "../security";
+import { isAuthorized, isAuthorizedInChat } from "../security";
 import { auditLog, startTypingIndicator } from "../utils";
 import { StreamingState, createStatusCallback } from "./streaming";
 
@@ -27,7 +27,7 @@ export async function handleCallback(ctx: Context): Promise<void> {
   }
 
   // 1. Authorization check
-  if (!isAuthorized(userId, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
     await ctx.answerCallbackQuery({ text: "Unauthorized" });
     return;
   }

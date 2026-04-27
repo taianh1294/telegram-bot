@@ -165,3 +165,24 @@ export function isAuthorized(
   if (allowedUsers.length === 0) return false;
   return allowedUsers.includes(userId);
 }
+
+/**
+ * Auth aware về context chat:
+ *  - Private chat → check allowlist như cũ
+ *  - Group/supergroup → bypass allowlist (đã filter @mention/reply trước đó)
+ *
+ * Lý do: trong group, ai @bot hoặc reply bot đều được dùng. Không phải Toàn
+ * cũng có thể hỏi bot trong context team.
+ */
+export function isAuthorizedInChat(
+  userId: number | undefined,
+  chatType: string | undefined,
+  allowedUsers: number[]
+): boolean {
+  if (chatType === "group" || chatType === "supergroup") {
+    // Đã qua group-filter (mention/reply check), cho phép mọi user trong group
+    return userId !== undefined;
+  }
+  // Private (hoặc loại khác): allowlist gốc
+  return isAuthorized(userId, allowedUsers);
+}

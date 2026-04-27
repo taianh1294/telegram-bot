@@ -6,10 +6,14 @@
 
 import type { Context } from "grammy";
 import { session } from "../session";
-import { ALLOWED_USERS, TEMP_DIR } from "../config";
-import { isAuthorized, rateLimiter } from "../security";
+import { ALLOWED_USERS, TEMP_DIR, QUIET_MODE } from "../config";
+import { isAuthorized, isAuthorizedInChat, rateLimiter } from "../security";
 import { auditLog, auditLogRateLimit, startTypingIndicator } from "../utils";
-import { StreamingState, createStatusCallback } from "./streaming";
+import {
+  StreamingState,
+  createStatusCallback,
+  setupQuietPlaceholder,
+} from "./streaming";
 import { createMediaGroupBuffer, handleProcessingError } from "./media-group";
 
 // Create photo-specific media group buffer
@@ -85,7 +89,9 @@ async function processPhotos(
 
   // Create streaming state
   const state = new StreamingState();
+  state.quietMode = QUIET_MODE;
   const statusCallback = createStatusCallback(ctx, state);
+  await setupQuietPlaceholder(ctx, state);
 
   try {
     const response = await session.sendMessageStreaming(
@@ -120,7 +126,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   }
 
   // 1. Authorization check
-  if (!isAuthorized(userId, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
     await ctx.reply("Unauthorized. Contact the bot owner for access.");
     return;
   }

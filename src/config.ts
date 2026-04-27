@@ -128,6 +128,11 @@ ${pathsList}
 4. For any destructive or irreversible action, ALWAYS ask for confirmation first.
 
 You are running via Telegram, so the user cannot easily undo mistakes. Be extra careful!
+
+FORMATTING RULES (Telegram):
+- Reply in plain Markdown. Use **bold**, *italic*, \`code\`, \`\`\`code blocks\`\`\`, [links](url), and bullet/numbered lists.
+- Do NOT emit raw HTML tags like <b>, <i>, <code>, <pre>, <blockquote>, <br>. The bot converts Markdown → Telegram HTML automatically; raw tags in your output will appear as literal text.
+- Keep replies concise and scannable.
 `;
 }
 
@@ -143,10 +148,20 @@ export const BLOCKED_PATTERNS = [
   "> /dev/sd",
   "mkfs.",
   "dd if=",
+  // Tự dừng / kickstart / curl getUpdates chính bot xeca → cô lập bot khỏi user.
+  "com.troly.bot.xeca",
+  "/getUpdates",
+  "pkill bun",
+  "killall bun",
 ];
 
 // Query timeout (3 minutes)
 export const QUERY_TIMEOUT_MS = 180_000;
+
+// Quiet mode: ẩn mọi tool/thinking/text streaming intermediate, chỉ gửi 1 tin
+// "🤔 đang xử lý..." khi bắt đầu, edit thành câu trả lời cuối khi done.
+export const QUIET_MODE =
+  (process.env.QUIET_MODE || "false").toLowerCase() === "true";
 
 // ============== Voice Transcription ==============
 
@@ -170,7 +185,10 @@ export const TRANSCRIPTION_PROMPT = TRANSCRIPTION_CONTEXT
   ? `${BASE_TRANSCRIPTION_PROMPT}\n\nAdditional context:\n${TRANSCRIPTION_CONTEXT}`
   : BASE_TRANSCRIPTION_PROMPT;
 
-export const TRANSCRIPTION_AVAILABLE = !!OPENAI_API_KEY;
+export const WHISPER_SCRIPT_PATH = process.env.WHISPER_SCRIPT_PATH || "";
+
+export const TRANSCRIPTION_AVAILABLE =
+  !!OPENAI_API_KEY || !!WHISPER_SCRIPT_PATH;
 
 // ============== Thinking Keywords ==============
 
@@ -219,9 +237,11 @@ export const RATE_LIMIT_WINDOW = parseInt(
 
 // ============== File Paths ==============
 
-export const SESSION_FILE = "/tmp/claude-telegram-session.json";
-export const RESTART_FILE = "/tmp/claude-telegram-restart.json";
-export const TEMP_DIR = "/tmp/telegram-bot";
+export const SESSION_FILE =
+  process.env.SESSION_FILE || "/tmp/claude-telegram-session.json";
+export const RESTART_FILE =
+  process.env.RESTART_FILE || "/tmp/claude-telegram-restart.json";
+export const TEMP_DIR = process.env.TEMP_DIR || "/tmp/telegram-bot";
 
 // Temp paths that are always allowed for bot operations
 export const TEMP_PATHS = ["/tmp/", "/private/tmp/", "/var/folders/"];

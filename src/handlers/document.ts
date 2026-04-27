@@ -1,18 +1,28 @@
 /**
  * Document handler for Claude Telegram Bot.
  *
- * Supports PDFs and text files with media group buffering.
- * PDF extraction uses pdftotext CLI (install via: brew install poppler)
+ * Supports PDF, Office (docx/xlsx/pptx/xls), EPub, text files, and archives.
+ * PDF + Office extraction goes through markitdown CLI (Python venv).
  */
 
 import type { Context } from "grammy";
+import { existsSync } from "fs";
 import { session } from "../session";
-import { ALLOWED_USERS, TEMP_DIR } from "../config";
-import { isAuthorized, rateLimiter } from "../security";
+import { ALLOWED_USERS, TEMP_DIR, QUIET_MODE } from "../config";
+import { isAuthorized, isAuthorizedInChat, rateLimiter } from "../security";
 import { auditLog, auditLogRateLimit, startTypingIndicator } from "../utils";
-import { StreamingState, createStatusCallback } from "./streaming";
+import {
+  StreamingState,
+  createStatusCallback,
+  setupQuietPlaceholder,
+} from "./streaming";
 import { createMediaGroupBuffer, handleProcessingError } from "./media-group";
 import { isAudioFile, processAudioFile } from "./audio";
+
+// Path to markitdown CLI. Set MARKITDOWN_CLI env nếu install ở venv riêng.
+// Mặc định gọi qua PATH — team cài bằng `pipx install markitdown` hoặc
+// `pip install markitdown` rồi để PATH tìm.
+const MARKITDOWN_CLI = process.env.MARKITDOWN_CLI || "markitdown";
 
 // Supported text file extensions
 const TEXT_EXTENSIONS = [
@@ -36,11 +46,21 @@ const TEXT_EXTENSIONS = [
   ".toml",
 ];
 
+// Formats handled by markitdown CLI (converted to Markdown).
+const MARKITDOWN_EXTENSIONS = [
+  ".pdf",
+  ".docx",
+  ".xlsx",
+  ".xls",
+  ".pptx",
+  ".epub",
+];
+
 // Supported archive extensions
 const ARCHIVE_EXTENSIONS = [".zip", ".tar", ".tar.gz", ".tgz"];
 
-// Max file size (10MB)
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
+// Max file size (50MB)
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
 // Max content from archive (50K chars total)
 const MAX_ARCHIVE_CONTENT = 50000;
@@ -79,6 +99,50 @@ async function downloadDocument(ctx: Context): Promise<string> {
 }
 
 /**
+ * Check if a file should be converted via markitdown CLI.
+ */
+function isMarkitdownFile(extension: string, mimeType?: string): boolean {
+  if (MARKITDOWN_EXTENSIONS.includes(extension)) return true;
+  if (mimeType === "application/pdf") return true;
+  if (
+    mimeType ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    mimeType ===
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    mimeType ===
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
+    mimeType === "application/epub+zip"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Convert a document to Markdown via markitdown CLI.
+ */
+async function markitdownExtract(filePath: string): Promise<string> {
+  if (!existsSync(MARKITDOWN_CLI)) {
+    throw new Error(
+      `markitdown CLI not found at ${MARKITDOWN_CLI}. Set MARKITDOWN_CLI env var or install: pip install 'markitdown[all]'`
+    );
+  }
+  const proc = Bun.spawn([MARKITDOWN_CLI, filePath], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(`markitdown exit ${exitCode}: ${stderr.slice(0, 200)}`);
+  }
+  return stdout;
+}
+
+/**
  * Extract text from a document.
  */
 async function extractText(
@@ -88,14 +152,15 @@ async function extractText(
   const fileName = filePath.split("/").pop() || "";
   const extension = "." + (fileName.split(".").pop() || "").toLowerCase();
 
-  // PDF extraction using pdftotext CLI (install: brew install poppler)
-  if (mimeType === "application/pdf" || extension === ".pdf") {
+  // PDF / Office / EPub → markitdown CLI
+  if (isMarkitdownFile(extension, mimeType)) {
     try {
-      const result = await Bun.$`pdftotext -layout ${filePath} -`.quiet();
-      return result.text();
+      const text = await markitdownExtract(filePath);
+      // Guard against runaway output — trim to 200K chars.
+      return text.slice(0, 200000);
     } catch (error) {
-      console.error("PDF parsing failed:", error);
-      return "[PDF parsing failed - ensure pdftotext is installed: brew install poppler]";
+      console.error("markitdown extraction failed:", error);
+      return `[Failed to convert ${extension}: ${String(error).slice(0, 200)}]`;
     }
   }
 
@@ -261,7 +326,9 @@ async function processArchive(
 
     // Create streaming state
     const state = new StreamingState();
+    state.quietMode = QUIET_MODE;
     const statusCallback = createStatusCallback(ctx, state);
+    await setupQuietPlaceholder(ctx, state);
 
     const response = await session.sendMessageStreaming(
       prompt,
@@ -350,7 +417,9 @@ async function processDocuments(
 
   // Create streaming state
   const state = new StreamingState();
+  state.quietMode = QUIET_MODE;
   const statusCallback = createStatusCallback(ctx, state);
+  await setupQuietPlaceholder(ctx, state);
 
   try {
     const response = await session.sendMessageStreaming(
@@ -424,27 +493,32 @@ export async function handleDocument(ctx: Context): Promise<void> {
   }
 
   // 1. Authorization check
-  if (!isAuthorized(userId, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
     await ctx.reply("Unauthorized. Contact the bot owner for access.");
     return;
   }
 
   // 2. Check file size
   if (doc.file_size && doc.file_size > MAX_FILE_SIZE) {
-    await ctx.reply("❌ File too large. Maximum size is 10MB.");
+    await ctx.reply("❌ File too large. Maximum size is 50MB.");
     return;
   }
 
   // 3. Check file type
   const fileName = doc.file_name || "";
   const extension = "." + (fileName.split(".").pop() || "").toLowerCase();
-  const isPdf = doc.mime_type === "application/pdf" || extension === ".pdf";
+  const isMarkdownable = isMarkitdownFile(extension, doc.mime_type);
   const isText =
     TEXT_EXTENSIONS.includes(extension) || doc.mime_type?.startsWith("text/");
   const isArchiveFile = isArchive(fileName);
 
   // Check if it's an audio file sent as a document
-  if (!isPdf && !isText && !isArchiveFile && isAudioFile(fileName, doc.mime_type)) {
+  if (
+    !isMarkdownable &&
+    !isText &&
+    !isArchiveFile &&
+    isAudioFile(fileName, doc.mime_type)
+  ) {
     console.log(`Received audio document: ${fileName} from @${username}`);
 
     // Rate limit check
@@ -471,12 +545,14 @@ export async function handleDocument(ctx: Context): Promise<void> {
     return;
   }
 
-  if (!isPdf && !isText && !isArchiveFile) {
+  if (!isMarkdownable && !isText && !isArchiveFile) {
     await ctx.reply(
-      `❌ Unsupported file type: ${extension || doc.mime_type}\n\n` +
-        `Supported: PDF, archives (${ARCHIVE_EXTENSIONS.join(
+      `❌ Định dạng file chưa hỗ trợ: ${extension || doc.mime_type}\n\n` +
+        `Hỗ trợ: ${MARKITDOWN_EXTENSIONS.join(
           ", "
-        )}), ${TEXT_EXTENSIONS.join(", ")}`
+        )}, archives (${ARCHIVE_EXTENSIONS.join(", ")}), ${TEXT_EXTENSIONS.join(
+          ", "
+        )}`
     );
     return;
   }

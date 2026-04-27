@@ -154,6 +154,28 @@ export class StreamingState {
   toolMessages: Message[] = []; // ephemeral tool status messages
   lastEditTimes = new Map<number, number>(); // segment_id -> last edit time
   lastContent = new Map<number, string>(); // segment_id -> last sent content
+
+  // Quiet mode (env QUIET_MODE=true): chỉ giữ 1 placeholder message, edit thành
+  // response cuối cùng khi done. Không gửi tool/thinking/intermediate text.
+  quietMode = false;
+  placeholderMessage: Message | null = null;
+  aggregatedText = "";
+}
+
+/**
+ * Tạo placeholder message "đang xử lý" — gọi từ handler trước khi run query.
+ * Chỉ tạo khi state.quietMode = true.
+ */
+export async function setupQuietPlaceholder(
+  ctx: Context,
+  state: StreamingState
+): Promise<void> {
+  if (!state.quietMode) return;
+  try {
+    state.placeholderMessage = await ctx.reply("🤔 đang xử lý...");
+  } catch (error) {
+    console.debug("Failed to send quiet placeholder:", error);
+  }
 }
 
 /**
@@ -168,14 +190,53 @@ function formatWithinLimit(
     content.length > safeLimit ? content.slice(0, safeLimit) + "..." : content;
   let formatted = convertMarkdownToHtml(display);
 
-  // HTML tags can inflate content beyond the limit - shrink until it fits
-  if (formatted.length > TELEGRAM_MESSAGE_LIMIT) {
+  // HTML tags can inflate content beyond the limit - shrink iteratively until it fits.
+  // Worst case (markdown-heavy content) may need multiple passes.
+  let guard = 5;
+  while (formatted.length > TELEGRAM_MESSAGE_LIMIT && guard-- > 0) {
     const ratio = TELEGRAM_MESSAGE_LIMIT / formatted.length;
-    display = content.slice(0, Math.floor(safeLimit * ratio * 0.95)) + "...";
+    const nextLen = Math.max(
+      200,
+      Math.floor(display.length * ratio * 0.9)
+    );
+    display = content.slice(0, nextLen) + "...";
     formatted = convertMarkdownToHtml(display);
   }
 
+  // Final hard cap — cut raw HTML at a safe boundary if shrinking didn't converge.
+  if (formatted.length > TELEGRAM_MESSAGE_LIMIT) {
+    formatted = formatted.slice(0, TELEGRAM_MESSAGE_LIMIT - 3) + "...";
+  }
+
   return formatted;
+}
+
+/**
+ * Split formatted HTML into chunks at safe boundaries so no tag is cut in half.
+ */
+function splitHtmlSafely(html: string, limit: number): string[] {
+  const chunks: string[] = [];
+  let rest = html;
+
+  while (rest.length > limit) {
+    // Prefer paragraph boundary, then newline, then space.
+    let cut = rest.lastIndexOf("\n\n", limit);
+    if (cut < limit * 0.5) cut = rest.lastIndexOf("\n", limit);
+    if (cut < limit * 0.5) cut = rest.lastIndexOf(" ", limit);
+    if (cut <= 0) cut = limit;
+
+    // If the cut falls inside an HTML tag (between "<" and ">"), back up.
+    const openTag = rest.lastIndexOf("<", cut);
+    const closeTag = rest.lastIndexOf(">", cut);
+    if (openTag > closeTag) {
+      cut = openTag;
+    }
+
+    chunks.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  if (rest.length) chunks.push(rest);
+  return chunks;
 }
 
 /**
@@ -185,9 +246,8 @@ async function sendChunkedMessages(
   ctx: Context,
   content: string
 ): Promise<void> {
-  // Split on markdown content first, then format each chunk
-  for (let i = 0; i < content.length; i += TELEGRAM_SAFE_LIMIT) {
-    const chunk = content.slice(i, i + TELEGRAM_SAFE_LIMIT);
+  const chunks = splitHtmlSafely(content, TELEGRAM_SAFE_LIMIT);
+  for (const chunk of chunks) {
     try {
       await ctx.reply(chunk, { parse_mode: "HTML" });
     } catch {
@@ -210,6 +270,60 @@ export function createStatusCallback(
 ): StatusCallback {
   return async (statusType: string, content: string, segmentId?: number) => {
     try {
+      // Quiet mode: bỏ qua mọi status trừ segment_end (gom text) + done (flush).
+      if (state.quietMode) {
+        if (statusType === "segment_end" && content) {
+          state.aggregatedText +=
+            (state.aggregatedText ? "\n\n" : "") + content;
+          return;
+        }
+        if (statusType === "done") {
+          const placeholder = state.placeholderMessage;
+          const finalText = state.aggregatedText.trim();
+
+          if (placeholder && finalText) {
+            const formatted = convertMarkdownToHtml(finalText);
+            if (formatted.length <= TELEGRAM_MESSAGE_LIMIT) {
+              try {
+                await ctx.api.editMessageText(
+                  placeholder.chat.id,
+                  placeholder.message_id,
+                  formatted,
+                  { parse_mode: "HTML" }
+                );
+              } catch {
+                try {
+                  await ctx.api.editMessageText(
+                    placeholder.chat.id,
+                    placeholder.message_id,
+                    finalText
+                  );
+                } catch (editError) {
+                  console.debug("Quiet edit failed:", editError);
+                }
+              }
+            } else {
+              try {
+                await ctx.api.deleteMessage(
+                  placeholder.chat.id,
+                  placeholder.message_id
+                );
+              } catch {}
+              await sendChunkedMessages(ctx, formatted);
+            }
+          } else if (placeholder && !finalText) {
+            // Không có response text — xóa placeholder cho gọn
+            try {
+              await ctx.api.deleteMessage(
+                placeholder.chat.id,
+                placeholder.message_id
+              );
+            } catch {}
+          }
+        }
+        return;
+      }
+
       if (statusType === "thinking") {
         // Show thinking inline, compact (first 500 chars)
         const preview =

@@ -5,6 +5,7 @@
  */
 
 import OpenAI from "openai";
+import { existsSync } from "fs";
 import type { Chat } from "grammy/types";
 import type { Context } from "grammy";
 import type { AuditEvent } from "./types";
@@ -14,6 +15,7 @@ import {
   OPENAI_API_KEY,
   TRANSCRIPTION_PROMPT,
   TRANSCRIPTION_AVAILABLE,
+  WHISPER_SCRIPT_PATH,
 } from "./config";
 
 // ============== OpenAI Client ==============
@@ -147,11 +149,30 @@ export async function auditLogRateLimit(
 
 // ============== Voice Transcription ==============
 
+export type TranscribeProgress = (info: {
+  elapsedSec: number;
+  stderrTail: string;
+}) => void | Promise<void>;
+
+export interface TranscribeOptions {
+  onProgress?: TranscribeProgress;
+  progressIntervalMs?: number;
+}
+
+/**
+ * Transcribe audio. Prefers local MLX Whisper if WHISPER_SCRIPT_PATH is set,
+ * otherwise falls back to OpenAI. Returns null on failure so the caller can
+ * decide whether to keep the audio file for retry.
+ */
 export async function transcribeVoice(
-  filePath: string
+  filePath: string,
+  options: TranscribeOptions = {}
 ): Promise<string | null> {
+  if (WHISPER_SCRIPT_PATH) {
+    return transcribeWithLocalScript(filePath, options);
+  }
   if (!openaiClient) {
-    console.warn("OpenAI client not available for transcription");
+    console.warn("No transcription backend configured");
     return null;
   }
 
@@ -166,6 +187,71 @@ export async function transcribeVoice(
   } catch (error) {
     console.error("Transcription failed:", error);
     return null;
+  }
+}
+
+async function transcribeWithLocalScript(
+  filePath: string,
+  options: TranscribeOptions
+): Promise<string | null> {
+  if (!existsSync(WHISPER_SCRIPT_PATH)) {
+    console.error(`WHISPER_SCRIPT_PATH not found: ${WHISPER_SCRIPT_PATH}`);
+    return null;
+  }
+
+  const startedAt = Date.now();
+  const proc = Bun.spawn([WHISPER_SCRIPT_PATH, filePath], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  // Tail the last few KB of stderr so the caller can surface recent progress.
+  let stderrTail = "";
+  const stderrCollector = (async () => {
+    const reader = proc.stderr.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      stderrTail = (stderrTail + decoder.decode(value)).slice(-4096);
+    }
+  })();
+
+  // Periodic progress tick while the subprocess is running.
+  const tick = options.progressIntervalMs ?? 30000;
+  const progressHandle = options.onProgress
+    ? setInterval(() => {
+        void options.onProgress!({
+          elapsedSec: Math.floor((Date.now() - startedAt) / 1000),
+          stderrTail,
+        });
+      }, tick)
+    : null;
+
+  try {
+    const [stdout, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      proc.exited,
+    ]);
+    await stderrCollector;
+
+    if (exitCode !== 0) {
+      console.error(
+        `Transcription script failed (exit ${exitCode}): ${stderrTail}`
+      );
+      return null;
+    }
+
+    const transcript = stdout.trim();
+    return transcript || null;
+  } catch (error) {
+    console.error("Transcription subprocess error:", error);
+    try {
+      proc.kill();
+    } catch {}
+    return null;
+  } finally {
+    if (progressHandle) clearInterval(progressHandle);
   }
 }
 

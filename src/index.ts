@@ -8,6 +8,11 @@ import { Bot } from "grammy";
 import { run, sequentialize } from "@grammyjs/runner";
 import { TELEGRAM_TOKEN, WORKING_DIR, ALLOWED_USERS, RESTART_FILE } from "./config";
 import { unlinkSync, readFileSync, existsSync } from "fs";
+import { session } from "./session";
+import {
+  groupFilterMiddleware,
+  setBotUsername,
+} from "./group-filter";
 import {
   handleStart,
   handleNew,
@@ -25,8 +30,19 @@ import {
   handleCallback,
 } from "./handlers";
 
-// Create bot instance
-const bot = new Bot(TELEGRAM_TOKEN);
+// Create bot instance.
+// timeoutSeconds: 60 — khi đổi mạng/wifi/sleep, TCP socket cũ stale; default
+// 500s khiến long-poll treo gần 9 phút trước khi runner kịp retry. 60s để
+// bot phục hồi nhanh sau network change.
+const bot = new Bot(TELEGRAM_TOKEN, {
+  client: {
+    timeoutSeconds: 60,
+  },
+});
+
+// Group filter — phải đặt TRƯỚC sequentialize để drop sớm tin nhắn không liên quan trong group.
+// Trong private chat: cho qua. Trong group: chỉ qua khi @mention bot hoặc reply bot.
+bot.use(groupFilterMiddleware);
 
 // Sequentialize non-command messages per user (prevents race conditions)
 // Commands bypass sequentialization so they work immediately
@@ -102,6 +118,21 @@ console.log("Starting bot...");
 // Get bot info first
 const botInfo = await bot.api.getMe();
 console.log(`Bot started: @${botInfo.username}`);
+
+// Init bot username cho group filter (case-insensitive match @mention)
+if (botInfo.username) {
+  setBotUsername(botInfo.username);
+  console.log(`Group filter ready: only respond when @${botInfo.username} mentioned or replied to`);
+}
+
+// Auto-resume cuộc trò chuyện gần nhất sau khi bot restart, để Toàn không phải gõ /resume.
+// Dùng /new bất cứ lúc nào để bắt đầu session mới.
+const [resumed, resumeMsg] = session.resumeLast();
+if (resumed) {
+  console.log(`Auto-resumed last session: ${resumeMsg}`);
+} else {
+  console.log(`No previous session to auto-resume (${resumeMsg})`);
+}
 
 // Check for pending restart message to update
 if (existsSync(RESTART_FILE)) {

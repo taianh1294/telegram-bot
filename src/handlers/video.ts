@@ -6,10 +6,14 @@
 
 import type { Context } from "grammy";
 import { session } from "../session";
-import { ALLOWED_USERS, TEMP_DIR } from "../config";
-import { isAuthorized, rateLimiter } from "../security";
+import { ALLOWED_USERS, TEMP_DIR, QUIET_MODE } from "../config";
+import { isAuthorized, isAuthorizedInChat, rateLimiter } from "../security";
 import { auditLog, auditLogRateLimit, startTypingIndicator } from "../utils";
-import { StreamingState, createStatusCallback } from "./streaming";
+import {
+  StreamingState,
+  createStatusCallback,
+  setupQuietPlaceholder,
+} from "./streaming";
 import { handleProcessingError } from "./media-group";
 
 // Max video size (50MB - reasonable for short clips/voice memos)
@@ -56,7 +60,7 @@ export async function handleVideo(ctx: Context): Promise<void> {
   }
 
   // 1. Authorization check
-  if (!isAuthorized(userId, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
     await ctx.reply("Unauthorized. Contact the bot owner for access.");
     return;
   }
@@ -124,7 +128,9 @@ export async function handleVideo(ctx: Context): Promise<void> {
 
     // Create streaming state
     const state = new StreamingState();
+    state.quietMode = QUIET_MODE;
     const statusCallback = createStatusCallback(ctx, state);
+    await setupQuietPlaceholder(ctx, state);
 
     const response = await session.sendMessageStreaming(
       prompt,

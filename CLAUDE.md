@@ -79,7 +79,13 @@ MCP servers defined in `mcp-config.ts`.
 
 **Type checking**: Run `bun run typecheck` periodically while editing TypeScript files. Fix any type errors before committing.
 
-**After code changes**: Restart the bot so changes can be tested. Use `launchctl kickstart -k gui/$(id -u)/com.claude-telegram-ts` if running as a service, or `bun run start` for manual runs.
+**After code changes**: Restart via launchd — it's the supervised way that avoids orphan processes / broken stdio:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.troly.bot
+```
+
+**NEVER** kill the bot PID from inside a chat session and then re-run `bun run src/index.ts` manually — the new process inherits a detached stdio and ends up alive-but-unresponsive. Always use `launchctl kickstart` so launchd owns the restart.
 
 ## Standalone Build
 
@@ -107,10 +113,18 @@ Do not add "Generated with Claude Code" footers or "Co-Authored-By" trailers to 
 
 ## Running as Service (macOS)
 
+This project is supervised by launchd via `~/Library/LaunchAgents/com.troly.bot.plist`.
+
 ```bash
-cp launchagent/com.claude-telegram-ts.plist.template ~/Library/LaunchAgents/com.claude-telegram-ts.plist
-# Edit plist with your paths
-launchctl load ~/Library/LaunchAgents/com.claude-telegram-ts.plist
+# Restart (preferred way — launchd handles stop/start cleanly)
+launchctl kickstart -k gui/$(id -u)/com.troly.bot
+
+# Status
+launchctl print gui/$(id -u)/com.troly.bot | grep -E "state|last exit|pid"
+
+# Stop / start (if you really need to)
+launchctl bootout   gui/$(id -u)/com.troly.bot
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.troly.bot.plist
 
 # Logs
 tail -f /tmp/claude-telegram-bot-ts.log

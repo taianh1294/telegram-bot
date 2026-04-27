@@ -4,15 +4,19 @@
 
 import type { Context } from "grammy";
 import { session } from "../session";
-import { ALLOWED_USERS } from "../config";
-import { isAuthorized, rateLimiter } from "../security";
+import { ALLOWED_USERS, QUIET_MODE } from "../config";
+import { isAuthorized, isAuthorizedInChat, rateLimiter } from "../security";
 import {
   auditLog,
   auditLogRateLimit,
   checkInterrupt,
   startTypingIndicator,
 } from "../utils";
-import { StreamingState, createStatusCallback } from "./streaming";
+import {
+  StreamingState,
+  createStatusCallback,
+  setupQuietPlaceholder,
+} from "./streaming";
 
 /**
  * Handle incoming text messages.
@@ -28,7 +32,7 @@ export async function handleText(ctx: Context): Promise<void> {
   }
 
   // 1. Authorization check
-  if (!isAuthorized(userId, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
     await ctx.reply("Unauthorized. Contact the bot owner for access.");
     return;
   }
@@ -68,7 +72,9 @@ export async function handleText(ctx: Context): Promise<void> {
 
   // 8. Create streaming state and callback
   let state = new StreamingState();
+  state.quietMode = QUIET_MODE;
   let statusCallback = createStatusCallback(ctx, state);
+  await setupQuietPlaceholder(ctx, state);
 
   // 9. Send to Claude with retry logic for crashes
   const MAX_RETRIES = 1;
@@ -99,6 +105,16 @@ export async function handleText(ctx: Context): Promise<void> {
           // Ignore cleanup errors
         }
       }
+      if (state.placeholderMessage) {
+        try {
+          await ctx.api.deleteMessage(
+            state.placeholderMessage.chat.id,
+            state.placeholderMessage.message_id
+          );
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
 
       // Retry on Claude Code crash (not user cancellation)
       if (isClaudeCodeCrash && attempt < MAX_RETRIES) {
@@ -109,7 +125,9 @@ export async function handleText(ctx: Context): Promise<void> {
         await ctx.reply(`⚠️ Claude crashed, retrying...`);
         // Reset state for retry
         state = new StreamingState();
+        state.quietMode = QUIET_MODE;
         statusCallback = createStatusCallback(ctx, state);
+        await setupQuietPlaceholder(ctx, state);
         continue;
       }
 

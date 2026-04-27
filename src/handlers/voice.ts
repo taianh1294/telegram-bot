@@ -5,15 +5,24 @@
 import type { Context } from "grammy";
 import { unlinkSync } from "fs";
 import { session } from "../session";
-import { ALLOWED_USERS, TEMP_DIR, TRANSCRIPTION_AVAILABLE } from "../config";
-import { isAuthorized, rateLimiter } from "../security";
+import {
+  ALLOWED_USERS,
+  TEMP_DIR,
+  TRANSCRIPTION_AVAILABLE,
+  QUIET_MODE,
+} from "../config";
+import { isAuthorized, isAuthorizedInChat, rateLimiter } from "../security";
 import {
   auditLog,
   auditLogRateLimit,
   transcribeVoice,
   startTypingIndicator,
 } from "../utils";
-import { StreamingState, createStatusCallback } from "./streaming";
+import {
+  StreamingState,
+  createStatusCallback,
+  setupQuietPlaceholder,
+} from "./streaming";
 
 /**
  * Handle incoming voice messages.
@@ -29,7 +38,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
   }
 
   // 1. Authorization check
-  if (!isAuthorized(userId, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
     await ctx.reply("Unauthorized. Contact the bot owner for access.");
     return;
   }
@@ -73,16 +82,37 @@ export async function handleVoice(ctx: Context): Promise<void> {
     const buffer = await downloadRes.arrayBuffer();
     await Bun.write(voicePath, buffer);
 
-    // 7. Transcribe
-    const statusMsg = await ctx.reply("🎤 Transcribing...");
+    // 7. Transcribe (with periodic progress updates for long files)
+    const statusMsg = await ctx.reply("🎤 Đang nhận dạng giọng nói...");
 
-    const transcript = await transcribeVoice(voicePath);
+    let lastShown = "";
+    const showProgress = async ({ elapsedSec }: { elapsedSec: number }) => {
+      const mins = Math.floor(elapsedSec / 60);
+      const secs = elapsedSec % 60;
+      const text = `🎤 Đang nhận dạng... (${mins}:${secs
+        .toString()
+        .padStart(2, "0")})`;
+      if (text === lastShown) return;
+      lastShown = text;
+      try {
+        await ctx.api.editMessageText(chatId, statusMsg.message_id, text);
+      } catch {
+        // Edit may fail if text unchanged or rate-limited — safe to ignore.
+      }
+    };
+
+    const transcript = await transcribeVoice(voicePath, {
+      onProgress: showProgress,
+      progressIntervalMs: 30000,
+    });
     if (!transcript) {
       await ctx.api.editMessageText(
         chatId,
         statusMsg.message_id,
-        "❌ Transcription failed."
+        `❌ Nhận dạng thất bại. File audio giữ lại tại:\n<code>${voicePath}</code>`,
+        { parse_mode: "HTML" }
       );
+      voicePath = null; // không xoá trong finally
       stopProcessing();
       return;
     }
@@ -108,7 +138,9 @@ export async function handleVoice(ctx: Context): Promise<void> {
 
     // 10. Create streaming state and callback
     const state = new StreamingState();
+    state.quietMode = QUIET_MODE;
     const statusCallback = createStatusCallback(ctx, state);
+    await setupQuietPlaceholder(ctx, state);
 
     // 11. Send to Claude
     const claudeResponse = await session.sendMessageStreaming(
