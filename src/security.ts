@@ -4,7 +4,7 @@
  * Rate limiting, path validation, command safety.
  */
 
-import { resolve, normalize } from "path";
+import { resolve, normalize, sep } from "path";
 import { realpathSync } from "fs";
 import type { RateLimitBucket } from "./types";
 import {
@@ -91,19 +91,25 @@ export function isPathAllowed(path: string): boolean {
       resolved = resolve(normalized);
     }
 
+    // Normalize to forward slashes for cross-platform comparison
+    const toForward = (p: string) => p.replace(/\\/g, "/");
+    const resolvedFwd = toForward(resolved);
+
     // Always allow temp paths (for bot's own files)
     for (const tempPath of TEMP_PATHS) {
-      if (resolved.startsWith(tempPath)) {
+      const tempFwd = toForward(tempPath);
+      if (resolvedFwd.startsWith(tempFwd)) {
         return true;
       }
     }
 
-    // Check against allowed paths using proper containment
+    // Check against allowed paths using proper containment (works on Windows + Unix)
     for (const allowed of ALLOWED_PATHS) {
-      const allowedResolved = resolve(allowed);
+      const allowedResolved = resolve(allowed.replace(/^~/, process.env.HOME || ""));
+      const allowedFwd = toForward(allowedResolved);
       if (
-        resolved === allowedResolved ||
-        resolved.startsWith(allowedResolved + "/")
+        resolvedFwd === allowedFwd ||
+        resolvedFwd.startsWith(allowedFwd + "/")
       ) {
         return true;
       }

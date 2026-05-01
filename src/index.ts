@@ -21,6 +21,7 @@ import {
   handleResume,
   handleRestart,
   handleRetry,
+  handleSchedules,
   handleText,
   handleVoice,
   handlePhoto,
@@ -29,6 +30,7 @@ import {
   handleVideo,
   handleCallback,
 } from "./handlers";
+import { startScheduler, stopScheduler } from "./scheduler";
 
 // Create bot instance.
 // timeoutSeconds: 60 — khi đổi mạng/wifi/sleep, TCP socket cũ stale; default
@@ -74,6 +76,7 @@ bot.command("status", handleStatus);
 bot.command("resume", handleResume);
 bot.command("restart", handleRestart);
 bot.command("retry", handleRetry);
+bot.command("schedules", handleSchedules);
 
 // ============== Message Handlers ==============
 
@@ -155,6 +158,9 @@ if (existsSync(RESTART_FILE)) {
   }
 }
 
+// Start scheduler (sends scheduled messages to users)
+startScheduler(bot.api);
+
 // Start with concurrent runner (commands work immediately)
 const runner = run(bot);
 
@@ -164,6 +170,7 @@ const stopRunner = () => {
     console.log("Stopping bot...");
     runner.stop();
   }
+  stopScheduler();
 };
 
 process.on("SIGINT", () => {

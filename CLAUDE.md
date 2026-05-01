@@ -107,6 +107,64 @@ When running as a standalone binary (especially from a macOS app), the PATH may 
 
 Without this, `pdftotext` won't be found and PDF parsing will fail silently with an error message.
 
+## Scheduler — Tạo lịch tự động
+
+Bot có hệ thống lịch tự động. File lịch: `E:/Powerful Assistant/data/schedules.json`
+
+### Cách tạo lịch mới
+
+Khi người dùng yêu cầu tạo lịch nhắc nhở, hãy đọc file schedules.json (tạo nếu chưa có), thêm entry mới và lưu lại. **Bắt buộc hỏi `chat_id` nếu chưa biết** — dùng lệnh /status để lấy.
+
+Chat ID của anh Tài Anh: **988275882** (private chat)
+
+### Format JSON
+
+```json
+{
+  "schedules": [
+    {
+      "id": "uuid-duy-nhat",
+      "name": "Tên lịch ngắn gọn",
+      "chat_id": 988275882,
+      "message": "Nội dung tin nhắn gửi đến người dùng (có thể dùng HTML: <b>bold</b>)",
+      "next_run": "2026-04-30T02:00:00.000Z",
+      "recurrence": {
+        "type": "daily",
+        "time": "09:00",
+        "timezone": "Asia/Ho_Chi_Minh"
+      },
+      "enabled": true,
+      "created_at": "2026-04-30T00:00:00.000Z",
+      "last_run": null
+    }
+  ]
+}
+```
+
+### Các loại lịch (`recurrence`)
+
+| type | Mô tả | Các trường bổ sung |
+|------|--------|-------------------|
+| *(không có)* | Chạy 1 lần rồi tắt | — |
+| `"interval"` | Lặp mỗi N phút | `interval_minutes: number` |
+| `"daily"` | Hàng ngày lúc HH:MM | `time: "HH:MM"`, `timezone` |
+| `"weekly"` | Hàng tuần | `time`, `timezone`, `day: 0-6` (0=CN) |
+
+### Tính `next_run`
+
+`next_run` là thời điểm UTC tiếp theo. Ví dụ: nhắc lúc 9:00 SA (GMT+7) = `03:00:00Z` hôm đó.
+
+Công thức: `next_run_UTC = local_time - 7h` (với timezone Asia/Ho_Chi_Minh = UTC+7)
+
+### Xóa / tắt lịch
+
+- Tắt tạm: đặt `"enabled": false`
+- Xóa hẳn: xóa entry khỏi mảng `schedules`
+
+### Xem lịch
+
+Người dùng gõ `/schedules` để xem tất cả lịch hiện tại.
+
 ## Commit Style
 
 Do not add "Generated with Claude Code" footers or "Co-Authored-By" trailers to commit messages.

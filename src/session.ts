@@ -321,10 +321,11 @@ class ClaudeSession {
                 const filePath = String(toolInput.file_path || "");
                 if (filePath) {
                   // Allow reads from temp paths and .claude directories
+                  const filePathFwd = filePath.replace(/\\/g, "/");
                   const isTmpRead =
                     toolName === "Read" &&
-                    (TEMP_PATHS.some((p) => filePath.startsWith(p)) ||
-                      filePath.includes("/.claude/"));
+                    (TEMP_PATHS.some((p) => filePathFwd.startsWith(p.replace(/\\/g, "/"))) ||
+                      filePathFwd.includes("/.claude/"));
 
                   if (!isTmpRead && !isPathAllowed(filePath)) {
                     console.warn(

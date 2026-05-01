@@ -39,3 +39,8 @@ mcp-config.ts
 # Finder (MacOS) folder config
 .DS_Store
 /claude-bot-standalone
+
+# Claude internal — không commit
+.claude/
+settings.json
+settings.local.json

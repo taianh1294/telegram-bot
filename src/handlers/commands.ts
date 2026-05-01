@@ -8,6 +8,7 @@ import type { Context } from "grammy";
 import { session } from "../session";
 import { WORKING_DIR, ALLOWED_USERS, RESTART_FILE } from "../config";
 import { isAuthorized, isAuthorizedInChat } from "../security";
+import { getSchedulesSummary } from "../scheduler";
 
 /**
  * /start - Show welcome message and status.
@@ -299,4 +300,19 @@ export async function handleRetry(ctx: Context): Promise<void> {
   } as Context;
 
   await handleText(fakeCtx);
+}
+
+/**
+ * /schedules - Show all scheduled tasks.
+ */
+export async function handleSchedules(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+    await ctx.reply("Unauthorized.");
+    return;
+  }
+
+  const summary = getSchedulesSummary();
+  await ctx.reply(summary, { parse_mode: "HTML" });
 }

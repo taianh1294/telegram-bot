@@ -5,7 +5,8 @@
 import type { Context } from "grammy";
 import { session } from "../session";
 import { ALLOWED_USERS, QUIET_MODE } from "../config";
-import { isAuthorized, isAuthorizedInChat, rateLimiter } from "../security";
+import { isAuthorizedInChat, rateLimiter } from "../security";
+import { runScheduleNow, findScheduleByKeyword } from "../scheduler";
 import {
   auditLog,
   auditLogRateLimit,
@@ -31,6 +32,14 @@ export async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
+  // Đính kèm nội dung quoted/replied message vào context
+  const replyMsg = ctx.message?.reply_to_message;
+  const replyText = replyMsg?.text || replyMsg?.caption;
+  if (replyText) {
+    const preview = replyText.length > 300 ? replyText.slice(0, 300) + "..." : replyText;
+    message = `[Trả lời tin nhắn: "${preview}"]\n\n${message}`;
+  }
+
   // 1. Authorization check
   if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
     await ctx.reply("Unauthorized. Contact the bot owner for access.");
@@ -53,12 +62,19 @@ export async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
-  // 4. Store message for retry
+  // 4. Check trigger keywords — fire matching schedule without going through Claude
+  const triggered = findScheduleByKeyword(message);
+  if (triggered) {
+    await ctx.reply(`⏳ Đang chạy: <b>${triggered.name}</b>...`, { parse_mode: "HTML" });
+    await runScheduleNow(ctx.api, triggered.id, chatId ?? undefined);
+    return;
+  }
+
+  // 5. Store message for retry
   session.lastMessage = message;
 
-  // 5. Set conversation title from first message (if new session)
+  // Set conversation title from first message (if new session)
   if (!session.isActive) {
-    // Truncate title to ~50 chars
     const title =
       message.length > 50 ? message.slice(0, 47) + "..." : message;
     session.conversationTitle = title;
