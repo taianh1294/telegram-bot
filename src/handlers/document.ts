@@ -18,6 +18,7 @@ import {
 } from "./streaming";
 import { createMediaGroupBuffer, handleProcessingError } from "./media-group";
 import { isAudioFile, processAudioFile } from "./audio";
+import { smartExtractPdf } from "../pdf-vision";
 
 // Path to markitdown CLI. Set MARKITDOWN_CLI env nếu install ở venv riêng.
 // Mặc định gọi qua PATH — team cài bằng `pipx install markitdown` hoặc
@@ -152,11 +153,26 @@ async function extractText(
   const fileName = filePath.split("/").pop() || "";
   const extension = "." + (fileName.split(".").pop() || "").toLowerCase();
 
-  // PDF / Office / EPub → markitdown CLI
+  // PDF: markitdown first, vision fallback for scanned PDFs
+  if (extension === ".pdf" || mimeType === "application/pdf") {
+    let markitdownText: string | null = null;
+    let markitdownErr: Error | null = null;
+
+    try {
+      markitdownText = (await markitdownExtract(filePath)).slice(0, 200000);
+    } catch (err) {
+      markitdownErr = err instanceof Error ? err : new Error(String(err));
+    }
+
+    const { text, method } = await smartExtractPdf(filePath, markitdownText, markitdownErr);
+    console.log(`[document] PDF extracted via ${method}: ${text.length} chars`);
+    return text.slice(0, 200000);
+  }
+
+  // Office / EPub → markitdown CLI only
   if (isMarkitdownFile(extension, mimeType)) {
     try {
       const text = await markitdownExtract(filePath);
-      // Guard against runaway output — trim to 200K chars.
       return text.slice(0, 200000);
     } catch (error) {
       console.error("markitdown extraction failed:", error);
