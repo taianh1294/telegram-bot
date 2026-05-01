@@ -23,11 +23,17 @@ import {
   getMode,
   isBetaMessage,
   stripBetaPrefix,
-  shouldTagBetaReply,
   getBetaSystemPrompt,
+  getDeptSystemPrompt,
   appendCompareLog,
   runSilentBetaQuery,
+  runCeoRoutingQuery,
 } from "../config-loader";
+import {
+  parseCeoRouting,
+  appendRoutingLog,
+  DEPT_LABELS,
+} from "../ceo-parser";
 
 /**
  * Handle incoming text messages.
@@ -86,12 +92,47 @@ export async function handleText(ctx: Context): Promise<void> {
   const isBeta = mode === "beta" || isBetaMessage(message);
 
   let sessionOverrides: { systemPrompt?: string; model?: string } | undefined;
-  let tagReply = false;
+  let replyTag = "";
 
   if (isBeta || isCompare) {
     message = stripBetaPrefix(message);
-    sessionOverrides = { systemPrompt: getBetaSystemPrompt() };
-    tagReply = shouldTagBetaReply();
+
+    // Phase 2: CEO routing — quick silent call to get dept
+    try {
+      const ceoResponse = await runCeoRoutingQuery(message);
+      const routing = parseCeoRouting(ceoResponse);
+
+      appendRoutingLog({
+        input: message,
+        action: routing?.action ?? "parse_failed",
+        dept: routing?.dept ?? null,
+        model_used: "claude-opus-4-7",
+        success: routing !== null,
+      });
+
+      if (routing?.action === "route" && routing.dept) {
+        const dept = routing.dept as string;
+        const label = DEPT_LABELS[dept] ?? dept.toUpperCase();
+        replyTag = `[${label}] `;
+        // Inject CEO context into message if provided
+        const contextedMsg = routing.context
+          ? `[Context: ${routing.context}]\n\n${message}`
+          : message;
+        message = contextedMsg;
+        sessionOverrides = { systemPrompt: getDeptSystemPrompt(dept) };
+        // Notify user which dept is handling
+        await ctx.reply(`🔀 Chuyển sang ${label}...`).catch(() => {});
+      } else {
+        // CEO handles directly or clarify
+        replyTag = "[BETA] ";
+        sessionOverrides = { systemPrompt: getBetaSystemPrompt() };
+      }
+    } catch (e) {
+      // CEO routing failed — fallback to CEO system prompt
+      console.warn("[routing] CEO query failed, using beta fallback:", e);
+      replyTag = "[BETA] ";
+      sessionOverrides = { systemPrompt: getBetaSystemPrompt() };
+    }
   }
 
   // Store (stripped) message for retry
@@ -128,8 +169,8 @@ export async function handleText(ctx: Context): Promise<void> {
         message,
         username,
         userId,
-        tagReply && !isCompare
-          ? wrapWithBetaTag(statusCallback)
+        replyTag && !isCompare
+          ? wrapWithBetaTag(replyTag, statusCallback)
           : statusCallback,
         chatId,
         ctx,
@@ -217,12 +258,12 @@ export async function handleText(ctx: Context): Promise<void> {
 }
 
 // Wraps statusCallback to prepend [BETA] tag on the first text segment
-function wrapWithBetaTag(cb: StatusCallback): StatusCallback {
+function wrapWithBetaTag(tag: string, cb: StatusCallback): StatusCallback {
   let tagged = false;
   return async (type, text, id) => {
     if (!tagged && type === "segment_end" && text) {
       tagged = true;
-      return cb(type, "[BETA] " + text, id);
+      return cb(type, tag + text, id);
     }
     return cb(type, text, id);
   };

@@ -139,6 +139,61 @@ export function appendCompareLog(entry: {
   }
 }
 
+// ── Dept system prompt ─────────────────────────────────────────────────────
+
+const VALID_DEPTS = ["it", "hr", "marketing", "finance", "pm", "van_hanh", "tham_dinh"];
+
+export function getDeptSystemPrompt(dept: string): string {
+  if (!VALID_DEPTS.includes(dept)) return getBetaSystemPrompt();
+  const p = resolve(BOT_ROOT, `agents/${dept}.md`);
+  if (!existsSync(p)) {
+    console.warn(`[config-loader] dept prompt not found: ${p}`);
+    return SAFETY_PROMPT;
+  }
+  return readFileSync(p, "utf-8") + "\n\n---\n\n" + SAFETY_PROMPT;
+}
+
+// ── CEO routing query (Phase 2) ────────────────────────────────────────────
+
+export async function runCeoRoutingQuery(
+  message: string
+): Promise<string> {
+  const parts: string[] = [];
+  const systemPrompt = getBetaSystemPrompt();
+  const cfg = loadConfig().beta as Record<string, unknown>;
+  const model = (cfg?.model as string) || "claude-opus-4-7";
+
+  const routingPrompt = `Route the following request. Return ONLY valid JSON, no explanation.\n\nRequest: ${message}`;
+
+  const options: Options = {
+    model,
+    cwd: WORKING_DIR,
+    settingSources: [],
+    permissionMode: "bypassPermissions",
+    allowDangerouslySkipPermissions: true,
+    systemPrompt,
+    additionalDirectories: ALLOWED_PATHS,
+  };
+
+  if (process.env.CLAUDE_CODE_PATH) {
+    options.pathToClaudeCodeExecutable = process.env.CLAUDE_CODE_PATH;
+  }
+
+  try {
+    for await (const event of query({ prompt: routingPrompt, options })) {
+      if (event.type === "assistant") {
+        for (const block of event.message.content) {
+          if (block.type === "text") parts.push(block.text);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[config-loader] CEO routing query error:", e);
+  }
+
+  return parts.join("");
+}
+
 // ── Silent beta query (for compare mode) ──────────────────────────────────
 
 export async function runSilentBetaQuery(
