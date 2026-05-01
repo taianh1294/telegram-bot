@@ -1,0 +1,22 @@
+# Bot operation mode: stable | beta | compare
+mode: stable
+
+stable:
+  system_prompt_file: "CLAUDE.md"
+  model: "claude-opus-4-7"
+
+beta:
+  trigger_prefix: "/beta"
+  tag_reply: true
+  system_prompt_file: "agents/ceo.md"
+  model: "claude-opus-4-7"
+
+compare:
+  enabled: false
+  run_both: true
+  log_file: "data/compare-log.json"
+  notify_user: false
+
+logging:
+  level: "INFO"
+  file: "data/bot.log"

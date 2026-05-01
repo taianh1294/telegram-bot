@@ -9,6 +9,7 @@ import { session } from "../session";
 import { WORKING_DIR, ALLOWED_USERS, RESTART_FILE } from "../config";
 import { isAuthorized, isAuthorizedInChat } from "../security";
 import { getSchedulesSummary } from "../scheduler";
+import { getMode, setMode, BOT_START_TIME, type Mode } from "../config-loader";
 
 /**
  * /start - Show welcome message and status.
@@ -163,6 +164,14 @@ export async function handleStatus(ctx: Context): Promise<void> {
   // Working directory
   lines.push(`\n📁 Working dir: <code>${WORKING_DIR}</code>`);
 
+  // Mode + uptime
+  const uptimeSec = Math.floor((Date.now() - BOT_START_TIME) / 1000);
+  const h = Math.floor(uptimeSec / 3600);
+  const m = Math.floor((uptimeSec % 3600) / 60);
+  const s = uptimeSec % 60;
+  const uptimeStr = h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`;
+  lines.push(`\n⚙️ Mode: <b>${getMode()}</b>  |  ⏱ Uptime: ${uptimeStr}`);
+
   await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
 }
 
@@ -300,6 +309,40 @@ export async function handleRetry(ctx: Context): Promise<void> {
   } as Context;
 
   await handleText(fakeCtx);
+}
+
+/**
+ * /mode [stable|beta|compare] — Change bot operation mode (owner only).
+ */
+export async function handleMode(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+    await ctx.reply("Unauthorized.");
+    return;
+  }
+
+  const arg = ctx.match?.toString().trim().toLowerCase() as Mode | "";
+
+  if (!arg) {
+    await ctx.reply(`⚙️ Current mode: <b>${getMode()}</b>\n\nUsage: /mode stable | beta | compare`, {
+      parse_mode: "HTML",
+    });
+    return;
+  }
+
+  if (!["stable", "beta", "compare"].includes(arg)) {
+    await ctx.reply("❌ Invalid mode. Use: stable | beta | compare");
+    return;
+  }
+
+  setMode(arg as Mode);
+  const labels: Record<Mode, string> = {
+    stable: "✅ Stable — normal flow",
+    beta: "🧪 Beta — all messages use CEO agent",
+    compare: "🔀 Compare — runs both, logs diff, replies stable",
+  };
+  await ctx.reply(labels[arg as Mode], { parse_mode: "HTML" });
 }
 
 /**

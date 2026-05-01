@@ -3,6 +3,7 @@
  */
 
 import type { Context } from "grammy";
+import type { StatusCallback } from "../types";
 import { session } from "../session";
 import { ALLOWED_USERS, QUIET_MODE } from "../config";
 import { isAuthorizedInChat, rateLimiter } from "../security";
@@ -18,6 +19,15 @@ import {
   createStatusCallback,
   setupQuietPlaceholder,
 } from "./streaming";
+import {
+  getMode,
+  isBetaMessage,
+  stripBetaPrefix,
+  shouldTagBetaReply,
+  getBetaSystemPrompt,
+  appendCompareLog,
+  runSilentBetaQuery,
+} from "../config-loader";
 
 /**
  * Handle incoming text messages.
@@ -70,7 +80,21 @@ export async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
-  // 5. Store message for retry
+  // 5. Routing: beta / compare mode
+  const mode = getMode();
+  const isCompare = mode === "compare";
+  const isBeta = mode === "beta" || isBetaMessage(message);
+
+  let sessionOverrides: { systemPrompt?: string; model?: string } | undefined;
+  let tagReply = false;
+
+  if (isBeta || isCompare) {
+    message = stripBetaPrefix(message);
+    sessionOverrides = { systemPrompt: getBetaSystemPrompt() };
+    tagReply = shouldTagBetaReply();
+  }
+
+  // Store (stripped) message for retry
   session.lastMessage = message;
 
   // Set conversation title from first message (if new session)
@@ -97,14 +121,37 @@ export async function handleText(ctx: Context): Promise<void> {
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
+      const stableOverrides = isCompare ? undefined : sessionOverrides;
+      const stableStart = Date.now();
+
       const response = await session.sendMessageStreaming(
         message,
         username,
         userId,
-        statusCallback,
+        tagReply && !isCompare
+          ? wrapWithBetaTag(statusCallback)
+          : statusCallback,
         chatId,
-        ctx
+        ctx,
+        stableOverrides
       );
+
+      // Compare mode: fire beta query silently in background after stable
+      if (isCompare) {
+        const stableLatency = Date.now() - stableStart;
+        void (async () => {
+          try {
+            const beta = await runSilentBetaQuery(message);
+            appendCompareLog({
+              input: message,
+              stable: { response, latency_ms: stableLatency },
+              beta,
+            });
+          } catch (e) {
+            console.warn("[compare] beta query failed:", e);
+          }
+        })();
+      }
 
       // 10. Audit log
       await auditLog(userId, username, "TEXT", message, response);
@@ -167,4 +214,16 @@ export async function handleText(ctx: Context): Promise<void> {
   // 11. Cleanup
   stopProcessing();
   typing.stop();
+}
+
+// Wraps statusCallback to prepend [BETA] tag on the first text segment
+function wrapWithBetaTag(cb: StatusCallback): StatusCallback {
+  let tagged = false;
+  return async (type, text, id) => {
+    if (!tagged && type === "segment_end" && text) {
+      tagged = true;
+      return cb(type, "[BETA] " + text, id);
+    }
+    return cb(type, text, id);
+  };
 }

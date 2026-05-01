@@ -176,7 +176,8 @@ class ClaudeSession {
     userId: number,
     statusCallback: StatusCallback,
     chatId?: number,
-    ctx?: Context
+    ctx?: Context,
+    overrides?: { systemPrompt?: string; model?: string }
   ): Promise<string> {
     // Set chat context for ask_user MCP tool
     if (chatId) {
@@ -210,12 +211,12 @@ class ClaudeSession {
 
     // Build SDK V1 options - supports all features
     const options: Options = {
-      model: "claude-opus-4-7",
+      model: overrides?.model || "claude-opus-4-7",
       cwd: WORKING_DIR,
       settingSources: ["user", "project"],
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
-      systemPrompt: SAFETY_PROMPT,
+      systemPrompt: overrides?.systemPrompt || SAFETY_PROMPT,
       mcpServers: MCP_SERVERS,
       maxThinkingTokens: thinkingTokens,
       additionalDirectories: ALLOWED_PATHS,
