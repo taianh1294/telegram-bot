@@ -163,6 +163,7 @@ function getTimezoneOffset(tz: string, utcDate: Date): number {
 }
 
 let schedulerInterval: ReturnType<typeof setInterval> | null = null;
+let tickRunning = false;
 
 /** Lấy giờ phút hiện tại theo timezone, dạng số phút từ 00:00 */
 function localMinutes(tz: string): number {
@@ -278,6 +279,9 @@ async function sendToChats(botApi: Api, chatIds: number[], text: string): Promis
 }
 
 async function tickScheduler(botApi: Api): Promise<void> {
+  if (tickRunning) return;
+  tickRunning = true;
+  try {
   const data = loadSchedules();
   const now = new Date();
   let changed = false;
@@ -328,6 +332,9 @@ async function tickScheduler(botApi: Api): Promise<void> {
   }
 
   if (changed) saveSchedules(data);
+  } finally {
+    tickRunning = false;
+  }
 }
 
 /** Tìm schedule theo keyword trong tin nhắn người dùng.

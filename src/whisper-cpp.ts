@@ -4,7 +4,7 @@
  * Pipeline: audio file → ffmpeg (WAV 16kHz mono) → whisper.cpp → transcript
  *
  * Env vars:
- *   WHISPER_CPP_PATH  — path to whisper-cli.exe / main.exe
+ *   WHISPER_CPP_PATH  — path to whisper-cli.exe (from whisper-bin-x64.zip Release/)
  *   WHISPER_CPP_MODEL — path to .bin model file (ggml-medium.bin recommended)
  *   WHISPER_CPP_LANG  — language code, default "vi"
  *   WHISPER_CPP_THREADS — CPU threads, default 4
@@ -16,6 +16,14 @@ const WHISPER_CPP_PATH    = process.env.WHISPER_CPP_PATH    || "";
 const WHISPER_CPP_MODEL   = process.env.WHISPER_CPP_MODEL   || "";
 const WHISPER_CPP_LANG    = process.env.WHISPER_CPP_LANG    || "vi";
 const WHISPER_CPP_THREADS = process.env.WHISPER_CPP_THREADS || "4";
+
+// Resolve ffmpeg: same dir as whisper-cli, then PATH fallback
+function resolveFfmpeg(): string {
+  if (!WHISPER_CPP_PATH) return "ffmpeg";
+  const dir = WHISPER_CPP_PATH.replace(/[/\\][^/\\]+$/, "");
+  const candidate = `${dir}\\ffmpeg.exe`;
+  return existsSync(candidate) ? candidate : "ffmpeg";
+}
 
 export function isWhisperCppAvailable(): boolean {
   return !!(
@@ -29,7 +37,7 @@ export function isWhisperCppAvailable(): boolean {
 async function convertToWav(inputPath: string): Promise<string> {
   const wavPath = inputPath.replace(/\.[^.]+$/, "_w.wav");
   const proc = Bun.spawn(
-    ["ffmpeg", "-y", "-i", inputPath,
+    [resolveFfmpeg(), "-y", "-i", inputPath,
      "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wavPath],
     { stdout: "pipe", stderr: "pipe" }
   );
