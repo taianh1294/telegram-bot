@@ -160,17 +160,26 @@ export interface TranscribeOptions {
 }
 
 /**
- * Transcribe audio. Prefers local MLX Whisper if WHISPER_SCRIPT_PATH is set,
- * otherwise falls back to OpenAI. Returns null on failure so the caller can
- * decide whether to keep the audio file for retry.
+ * Transcribe audio.
+ * Priority: whisper.cpp (local) → WHISPER_SCRIPT_PATH (custom script) → OpenAI API
+ * Returns null on failure so the caller can decide whether to keep the audio file.
  */
 export async function transcribeVoice(
   filePath: string,
   options: TranscribeOptions = {}
 ): Promise<string | null> {
+  // 1. whisper.cpp — local, free, works offline
+  const { isWhisperCppAvailable, transcribeWithWhisperCpp } = await import("./whisper-cpp");
+  if (isWhisperCppAvailable()) {
+    return transcribeWithWhisperCpp(filePath, options);
+  }
+
+  // 2. Custom local script (legacy MLX Whisper or any wrapper)
   if (WHISPER_SCRIPT_PATH) {
     return transcribeWithLocalScript(filePath, options);
   }
+
+  // 3. OpenAI Whisper API
   if (!openaiClient) {
     console.warn("No transcription backend configured");
     return null;

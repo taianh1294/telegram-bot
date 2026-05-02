@@ -187,8 +187,12 @@ export const TRANSCRIPTION_PROMPT = TRANSCRIPTION_CONTEXT
 
 export const WHISPER_SCRIPT_PATH = process.env.WHISPER_SCRIPT_PATH || "";
 
+// whisper.cpp local STT (Windows/Linux/Mac — set paths in .env)
+export const WHISPER_CPP_PATH  = process.env.WHISPER_CPP_PATH  || "";
+export const WHISPER_CPP_MODEL = process.env.WHISPER_CPP_MODEL || "";
+
 export const TRANSCRIPTION_AVAILABLE =
-  !!OPENAI_API_KEY || !!WHISPER_SCRIPT_PATH;
+  !!WHISPER_CPP_PATH || !!OPENAI_API_KEY || !!WHISPER_SCRIPT_PATH;
 
 // ============== Thinking Keywords ==============
 
