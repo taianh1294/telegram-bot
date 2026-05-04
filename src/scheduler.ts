@@ -14,7 +14,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import type { Api } from "grammy";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { WORKING_DIR } from "./config";
+import { WORKING_DIR, SAFETY_PROMPT, ALLOWED_PATHS } from "./config";
 import { resolve } from "path";
 
 const SCHEDULES_FILE = resolve(WORKING_DIR, "data/schedules.json");
@@ -28,6 +28,8 @@ export interface Recurrence {
   timezone?: string;       // e.g. "Asia/Ho_Chi_Minh"
   window_start?: string;   // "HH:MM" — startup_daily: earliest fire time
   window_end?: string;     // "HH:MM" — startup_daily: latest fire time
+  weekdays?: number[];     // startup_daily: chỉ chạy vào các ngày này (0=CN..6=T7). Bỏ trống = mọi ngày
+  skip_if_missed_days?: number; // startup_daily: nếu lỡ kỳ trước >N ngày thì bỏ, chờ kỳ tiếp
 }
 
 export interface Schedule {
@@ -36,7 +38,7 @@ export interface Schedule {
   chat_id: number;
   message: string;          // static message to send, OR prompt for claude_query
   claude_query?: boolean;      // if true: send `message` to Claude, forward response to user
-  claude_model?: string;       // model override for claude_query (default: claude-sonnet-4-6)
+  claude_model?: string;       // model override for claude_query (default: cc/claude-sonnet-4-6)
   trigger_keywords?: string[]; // keywords that manually fire this schedule (case-insensitive)
   notify_chats?: number[];     // gửi đến nhiều chat (bổ sung hoặc thay thế chat_id khi schedule tự trigger)
   next_run: string;         // ISO UTC string
@@ -185,20 +187,108 @@ function toMinutes(hhmm: string): number {
   return (h || 0) * 60 + (m || 0);
 }
 
-/** Kiểm tra startup_daily: trong khung giờ và chưa gửi hôm nay */
+/** Lấy weekday hiện tại theo timezone (0=CN..6=T7) */
+function localWeekday(tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    weekday: "short",
+  }).formatToParts(new Date());
+  const wd = parts.find(p => p.type === "weekday")?.value || "Sun";
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return map[wd] ?? 0;
+}
+
+/** Tính số ngày từ một ngày (theo tz) đến hôm nay */
+function daysSinceLocalDate(dateStr: string, tz: string): number {
+  const today = localDateStr(tz);
+  const d1 = new Date(dateStr + "T00:00:00Z").getTime();
+  const d2 = new Date(today + "T00:00:00Z").getTime();
+  return Math.floor((d2 - d1) / 86_400_000);
+}
+
+/** Tìm ngày gần nhất trong quá khứ thuộc weekdays (theo tz). Trả về 'YYYY-MM-DD' */
+function lastScheduledDateBefore(weekdays: number[], tz: string): string | null {
+  if (!weekdays.length) return null;
+  for (let offset = 0; offset < 14; offset++) {
+    const candidate = new Date(Date.now() - offset * 86_400_000);
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      weekday: "short",
+    }).formatToParts(candidate);
+    const wdStr = parts.find(p => p.type === "weekday")?.value || "Sun";
+    const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const wd = map[wdStr] ?? 0;
+    if (weekdays.includes(wd)) {
+      return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(candidate);
+    }
+  }
+  return null;
+}
+
+/** Kiểm tra startup_daily: trong khung giờ và chưa gửi hôm nay.
+ *  Hỗ trợ thêm:
+ *    - weekdays: chỉ chạy vào các ngày trong tuần này (0=CN..6=T7)
+ *    - skip_if_missed_days: nếu kỳ trước đã trễ >N ngày, bỏ luôn chờ kỳ tiếp
+ */
 function shouldFireOnStartup(schedule: Schedule): boolean {
   if (schedule.recurrence?.type !== "startup_daily") return false;
-  const tz = schedule.recurrence.timezone || "Asia/Ho_Chi_Minh";
+  const r = schedule.recurrence;
+  const tz = r.timezone || "Asia/Ho_Chi_Minh";
   const now = localMinutes(tz);
-  const start = toMinutes(schedule.recurrence.window_start || "08:00");
-  const end = toMinutes(schedule.recurrence.window_end || "20:30");
+  const start = toMinutes(r.window_start || "08:00");
+  const end = toMinutes(r.window_end || "20:30");
   if (now < start || now > end) return false;
+
+  // Hôm nay là ngày được phép?
+  // Nếu weekdays được khai báo, hôm nay phải nằm trong đó HOẶC là ngày catch-up cho kỳ vừa lỡ.
+  let allowedToday = true;
+  let isCatchUp = false;
+  if (r.weekdays && r.weekdays.length > 0) {
+    const todayWd = localWeekday(tz);
+    if (r.weekdays.includes(todayWd)) {
+      allowedToday = true;
+    } else {
+      // Catch-up: kỳ gần nhất là khi nào? Có nằm trong cửa sổ skipIfMissedDays?
+      const lastSched = lastScheduledDateBefore(r.weekdays, tz);
+      const skipAfter = r.skip_if_missed_days ?? 2;
+      if (lastSched) {
+        const daysSince = daysSinceLocalDate(lastSched, tz);
+        // Trong cửa sổ catch-up: 1..skipAfter ngày sau kỳ trước
+        if (daysSince >= 1 && daysSince <= skipAfter) {
+          // Đã gửi cho kỳ đó chưa?
+          if (!schedule.last_run) {
+            allowedToday = true;
+            isCatchUp = true;
+          } else {
+            const lastRunDate = new Intl.DateTimeFormat("en-CA", { timeZone: tz })
+              .format(new Date(schedule.last_run));
+            if (lastRunDate < lastSched) {
+              // Last run trước kỳ trước → chưa gửi cho kỳ trước → catch-up
+              allowedToday = true;
+              isCatchUp = true;
+            } else {
+              allowedToday = false;
+            }
+          }
+        } else {
+          allowedToday = false;
+        }
+      } else {
+        allowedToday = false;
+      }
+    }
+  }
+  if (!allowedToday) return false;
 
   // Chưa gửi hôm nay?
   if (!schedule.last_run) return true;
   const lastRunDate = new Intl.DateTimeFormat("en-CA", { timeZone: tz })
     .format(new Date(schedule.last_run));
-  return lastRunDate !== localDateStr(tz);
+  if (lastRunDate === localDateStr(tz)) return false;
+
+  // Nếu là catch-up, chỉ cho fire khi last_run đúng là chưa gửi cho kỳ trước
+  // (đã kiểm tra ở trên), nên đến đây OK
+  return true;
 }
 
 export function startScheduler(botApi: Api): void {
@@ -236,7 +326,7 @@ export function stopScheduler(): void {
 }
 
 async function runClaudeQuery(schedule: Schedule): Promise<string> {
-  const model = schedule.claude_model || "claude-sonnet-4-6";
+  const model = schedule.claude_model || "cc/claude-sonnet-4-6";
   console.log(`[scheduler] claude_query "${schedule.name}" model=${model}`);
 
   const parts: string[] = [];
@@ -248,6 +338,9 @@ async function runClaudeQuery(schedule: Schedule): Promise<string> {
         maxTurns: 15,
         permissionMode: "bypassPermissions",
         cwd: WORKING_DIR,
+        mcpServers: {},
+        systemPrompt: SAFETY_PROMPT,
+        additionalDirectories: ALLOWED_PATHS,
       },
     })) {
       if (event.type === "assistant") {
@@ -265,15 +358,27 @@ async function runClaudeQuery(schedule: Schedule): Promise<string> {
   return response;
 }
 
-async function sendToChats(botApi: Api, chatIds: number[], text: string): Promise<void> {
+async function sendTextToChat(botApi: Api, chatId: number, text: string): Promise<void> {
   const LIMIT = 4000;
+  const chunks = text.length <= LIMIT ? [text] : Array.from({ length: Math.ceil(text.length / LIMIT) }, (_, i) => text.slice(i * LIMIT, (i + 1) * LIMIT));
+  for (const chunk of chunks) {
+    try {
+      await botApi.sendMessage(chatId, chunk, { parse_mode: "HTML" });
+    } catch {
+      // Fallback: strip HTML tags and send as plain text
+      const plain = chunk.replace(/<[^>]*>/g, "");
+      await botApi.sendMessage(chatId, plain);
+    }
+  }
+}
+
+async function sendToChats(botApi: Api, chatIds: number[], text: string): Promise<void> {
   for (const cid of chatIds) {
-    if (text.length <= LIMIT) {
-      await botApi.sendMessage(cid, text, { parse_mode: "HTML" });
-    } else {
-      for (let i = 0; i < text.length; i += LIMIT) {
-        await botApi.sendMessage(cid, text.slice(i, i + LIMIT), { parse_mode: "HTML" });
-      }
+    try {
+      await sendTextToChat(botApi, cid, text);
+      console.log(`[scheduler] Sent to chat ${cid}`);
+    } catch (e) {
+      console.error(`[scheduler] Failed to send to chat ${cid}:`, e);
     }
   }
 }
@@ -370,13 +475,18 @@ export async function runScheduleNow(botApi: Api, scheduleId: string, overrideCh
       await sendToChats(botApi, [targetChatId], response);
       saveLastNewsletter(schedule.id, response);
     } else {
-      await botApi.sendMessage(targetChatId, schedule.message, { parse_mode: "HTML" });
+      await sendTextToChat(botApi, targetChatId, schedule.message);
     }
     schedule.last_run = now.toISOString();
     saveSchedules(data);
     return true;
   } catch (e) {
     console.error(`[scheduler] Manual fire failed "${schedule.name}":`, e);
+    try {
+      await botApi.sendMessage(targetChatId, `❌ Lỗi khi tổng hợp <b>${schedule.name}</b>: ${String(e).slice(0, 200)}`, { parse_mode: "HTML" });
+    } catch {
+      // ignore notification error
+    }
     return false;
   }
 }

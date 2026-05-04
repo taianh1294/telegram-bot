@@ -193,8 +193,8 @@ export function isAuthorizedInChat(
   chatId?: number
 ): boolean {
   if (chatType === "group" || chatType === "supergroup") {
-    // Group messages are only allowed from trusted users in trusted chat IDs.
-    return isAuthorized(userId, allowedUsers) && chatId !== undefined && ALLOWED_GROUPS.includes(chatId);
+    // Any user can interact in trusted groups — the group itself is the trust boundary.
+    return chatId !== undefined && ALLOWED_GROUPS.includes(chatId);
   }
   // Private (hoặc loại khác): allowlist gốc
   return isAuthorized(userId, allowedUsers);

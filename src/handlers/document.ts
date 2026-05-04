@@ -23,7 +23,7 @@ import { smartExtractPdf } from "../pdf-vision";
 // Path to markitdown CLI. Set MARKITDOWN_CLI env nếu install ở venv riêng.
 // Mặc định gọi qua PATH — team cài bằng `pipx install markitdown` hoặc
 // `pip install markitdown` rồi để PATH tìm.
-const MARKITDOWN_CLI = process.env.MARKITDOWN_CLI || "markitdown";
+const MARKITDOWN_CLI = process.env.MARKITDOWN_CLI || Bun.which("markitdown") || "markitdown";
 
 // Supported text file extensions
 const TEXT_EXTENSIONS = [

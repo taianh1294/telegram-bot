@@ -82,8 +82,8 @@ export async function transcribeWithWhisperCpp(
       "-f", wavPath,
       "-l", WHISPER_CPP_LANG,
       "-t", WHISPER_CPP_THREADS,
-      "-np",          // no system/progress prints
-      "-nt",          // no timestamps in output
+      "--no-prints",   // suppress progress/info prints to stderr
+      "-nt",           // no timestamps in output
     ];
 
     const startedAt = Date.now();
