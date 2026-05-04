@@ -8,6 +8,7 @@ import { resolve, normalize, sep } from "path";
 import { realpathSync } from "fs";
 import type { RateLimitBucket } from "./types";
 import {
+  ALLOWED_GROUPS,
   ALLOWED_PATHS,
   BLOCKED_PATTERNS,
   RATE_LIMIT_ENABLED,
@@ -105,7 +106,12 @@ export function isPathAllowed(path: string): boolean {
 
     // Check against allowed paths using proper containment (works on Windows + Unix)
     for (const allowed of ALLOWED_PATHS) {
-      const allowedResolved = resolve(allowed.replace(/^~/, process.env.HOME || ""));
+      let allowedResolved = resolve(allowed.replace(/^~/, process.env.HOME || ""));
+      try {
+        allowedResolved = realpathSync(allowedResolved);
+      } catch {
+        // path may not exist yet, keep resolved form
+      }
       const allowedFwd = toForward(allowedResolved);
       if (
         resolvedFwd === allowedFwd ||
@@ -175,19 +181,20 @@ export function isAuthorized(
 /**
  * Auth aware về context chat:
  *  - Private chat → check allowlist như cũ
- *  - Group/supergroup → bypass allowlist (đã filter @mention/reply trước đó)
+ *  - Group/supergroup → require both TELEGRAM_ALLOWED_GROUPS and TELEGRAM_ALLOWED_USERS
  *
- * Lý do: trong group, ai @bot hoặc reply bot đều được dùng. Không phải Toàn
- * cũng có thể hỏi bot trong context team.
+ * Group filter still controls mention/reply behavior; this check controls which
+ * groups and users are trusted enough to use the bot at all.
  */
 export function isAuthorizedInChat(
   userId: number | undefined,
   chatType: string | undefined,
-  allowedUsers: number[]
+  allowedUsers: number[],
+  chatId?: number
 ): boolean {
   if (chatType === "group" || chatType === "supergroup") {
-    // Đã qua group-filter (mention/reply check), cho phép mọi user trong group
-    return userId !== undefined;
+    // Group messages are only allowed from trusted users in trusted chat IDs.
+    return isAuthorized(userId, allowedUsers) && chatId !== undefined && ALLOWED_GROUPS.includes(chatId);
   }
   // Private (hoặc loại khác): allowlist gốc
   return isAuthorized(userId, allowedUsers);

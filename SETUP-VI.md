@@ -129,6 +129,7 @@ Mặc định bot dùng được trong **chat riêng** với người trong `TEL
    ```
 4. (Tuỳ chọn) Dán chat_id vào `.env`:
    ```bash
+   TELEGRAM_ALLOWED_GROUPS=-1001234567890
    TELEGRAM_GROUP_CHAT_ID=-1001234567890
    ```
 

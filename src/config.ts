@@ -42,6 +42,14 @@ export const ALLOWED_USERS: number[] = (
   .map((x) => parseInt(x.trim(), 10))
   .filter((x) => !isNaN(x));
 
+export const ALLOWED_GROUPS: number[] = (
+  process.env.TELEGRAM_ALLOWED_GROUPS || ""
+)
+  .split(",")
+  .filter((x) => x.trim())
+  .map((x) => parseInt(x.trim(), 10))
+  .filter((x) => !isNaN(x));
+
 export const WORKING_DIR = process.env.CLAUDE_WORKING_DIR || HOME;
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 
@@ -268,5 +276,5 @@ if (ALLOWED_USERS.length === 0) {
 }
 
 console.log(
-  `Config loaded: ${ALLOWED_USERS.length} allowed users, working dir: ${WORKING_DIR}`
+  `Config loaded: ${ALLOWED_USERS.length} allowed users, ${ALLOWED_GROUPS.length} allowed groups, working dir: ${WORKING_DIR}`
 );

@@ -5,7 +5,7 @@
  */
 
 import type { Context } from "grammy";
-import { session } from "../session";
+import { getSessionForChat } from "../session";
 import { WORKING_DIR, ALLOWED_USERS, RESTART_FILE } from "../config";
 import { isAuthorized, isAuthorizedInChat } from "../security";
 import { getSchedulesSummary } from "../scheduler";
@@ -18,11 +18,12 @@ export async function handleStart(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
   const username = ctx.from?.username || "unknown";
 
-  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS, ctx.chat?.id)) {
     await ctx.reply("Unauthorized. Contact the bot owner for access.");
     return;
   }
 
+  const session = getSessionForChat(ctx.chat?.id, ctx.chat?.type);
   const status = session.isActive ? "Active session" : "No active session";
   const workDir = WORKING_DIR;
 
@@ -51,11 +52,12 @@ export async function handleStart(ctx: Context): Promise<void> {
 export async function handleNew(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
 
-  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS, ctx.chat?.id)) {
     await ctx.reply("Unauthorized.");
     return;
   }
 
+  const session = getSessionForChat(ctx.chat?.id, ctx.chat?.type);
   // Stop any running query
   if (session.isRunning) {
     const result = await session.stop();
@@ -77,11 +79,12 @@ export async function handleNew(ctx: Context): Promise<void> {
 export async function handleStop(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
 
-  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS, ctx.chat?.id)) {
     await ctx.reply("Unauthorized.");
     return;
   }
 
+  const session = getSessionForChat(ctx.chat?.id, ctx.chat?.type);
   if (session.isRunning) {
     const result = await session.stop();
     if (result) {
@@ -100,12 +103,14 @@ export async function handleStop(ctx: Context): Promise<void> {
 export async function handleStatus(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
 
-  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS, ctx.chat?.id)) {
     await ctx.reply("Unauthorized.");
     return;
   }
 
   const lines: string[] = ["📊 <b>Bot Status</b>\n"];
+
+  const session = getSessionForChat(ctx.chat?.id, ctx.chat?.type);
 
   // Session status
   if (session.isActive) {
@@ -181,10 +186,12 @@ export async function handleStatus(ctx: Context): Promise<void> {
 export async function handleResume(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
 
-  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS, ctx.chat?.id)) {
     await ctx.reply("Unauthorized.");
     return;
   }
+
+  const session = getSessionForChat(ctx.chat?.id, ctx.chat?.type);
 
   if (session.isActive) {
     await ctx.reply("Sessione già attiva. Usa /new per iniziare da capo.");
@@ -239,7 +246,7 @@ export async function handleRestart(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
   const chatId = ctx.chat?.id;
 
-  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS, ctx.chat?.id)) {
     await ctx.reply("Unauthorized.");
     return;
   }
@@ -275,10 +282,12 @@ export async function handleRestart(ctx: Context): Promise<void> {
 export async function handleRetry(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
 
-  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS, ctx.chat?.id)) {
     await ctx.reply("Unauthorized.");
     return;
   }
+
+  const session = getSessionForChat(ctx.chat?.id, ctx.chat?.type);
 
   // Check if there's a message to retry
   if (!session.lastMessage) {
@@ -317,7 +326,7 @@ export async function handleRetry(ctx: Context): Promise<void> {
 export async function handleMode(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
 
-  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS, ctx.chat?.id)) {
     await ctx.reply("Unauthorized.");
     return;
   }
@@ -351,7 +360,7 @@ export async function handleMode(ctx: Context): Promise<void> {
 export async function handleSchedules(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
 
-  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS, ctx.chat?.id)) {
     await ctx.reply("Unauthorized.");
     return;
   }

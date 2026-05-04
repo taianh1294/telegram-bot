@@ -4,7 +4,7 @@
 
 import type { Context } from "grammy";
 import type { StatusCallback } from "../types";
-import { session } from "../session";
+import { getSessionForChat } from "../session";
 import { ALLOWED_USERS, QUIET_MODE } from "../config";
 import { isAuthorizedInChat, rateLimiter } from "../security";
 import { runScheduleNow, findScheduleByKeyword } from "../scheduler";
@@ -34,6 +34,8 @@ import {
   appendRoutingLog,
   DEPT_LABELS,
 } from "../ceo-parser";
+import { getGroupRoute } from "../group-routing";
+import { consumeDailyGroupQuota } from "../group-quota";
 
 /**
  * Handle incoming text messages.
@@ -48,6 +50,9 @@ export async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
+  const activeSession = getSessionForChat(chatId, ctx.chat?.type);
+  const groupRoute = getGroupRoute(chatId, ctx.chat?.type);
+
   // Đính kèm nội dung quoted/replied message vào context
   const replyMsg = ctx.message?.reply_to_message;
   const replyText = replyMsg?.text || replyMsg?.caption;
@@ -57,13 +62,13 @@ export async function handleText(ctx: Context): Promise<void> {
   }
 
   // 1. Authorization check
-  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS, ctx.chat?.id)) {
     await ctx.reply("Unauthorized. Contact the bot owner for access.");
     return;
   }
 
   // 2. Check for interrupt prefix
-  message = await checkInterrupt(message);
+  message = await checkInterrupt(message, activeSession);
   if (!message.trim()) {
     return;
   }
@@ -86,12 +91,27 @@ export async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
+  if (groupRoute?.dailyRequestLimitPerUser) {
+    const quota = consumeDailyGroupQuota(
+      chatId,
+      userId,
+      groupRoute.dailyRequestLimitPerUser
+    );
+    if (!quota.allowed) {
+      await ctx.reply(
+        `Anh đã dùng hết ${quota.limit} request hôm nay trong group này. Hạn mức sẽ reset vào ngày mai.`
+      );
+      return;
+    }
+  }
+
   // 5. Routing: beta / compare mode
   const mode = getMode();
-  const isCompare = mode === "compare";
-  const isBeta = mode === "beta" || isBetaMessage(message);
+  const isCompare = !groupRoute && mode === "compare";
+  const isBeta = !groupRoute && (mode === "beta" || isBetaMessage(message));
 
-  let sessionOverrides: { systemPrompt?: string; model?: string } | undefined;
+  let sessionOverrides: { systemPrompt?: string; model?: string } | undefined =
+    groupRoute ? { systemPrompt: groupRoute.systemPrompt } : undefined;
   let replyTag = "";
 
   if (isBeta || isCompare) {
@@ -106,7 +126,7 @@ export async function handleText(ctx: Context): Promise<void> {
         input: message,
         action: routing?.action ?? "parse_failed",
         dept: routing?.dept ?? null,
-        model_used: "claude-opus-4-7",
+        model_used: "cc/claude-opus-4-7",
         success: routing !== null,
       });
 
@@ -136,17 +156,19 @@ export async function handleText(ctx: Context): Promise<void> {
   }
 
   // Store (stripped) message for retry
-  session.lastMessage = message;
+  activeSession.lastMessage = message;
 
   // Set conversation title from first message (if new session)
-  if (!session.isActive) {
+  if (!activeSession.isActive) {
     const title =
       message.length > 50 ? message.slice(0, 47) + "..." : message;
-    session.conversationTitle = title;
+    activeSession.conversationTitle = groupRoute
+      ? `${groupRoute.name}: ${title}`
+      : title;
   }
 
   // 6. Mark processing started
-  const stopProcessing = session.startProcessing();
+  const stopProcessing = activeSession.startProcessing();
 
   // 7. Start typing indicator
   const typing = startTypingIndicator(ctx);
@@ -165,7 +187,7 @@ export async function handleText(ctx: Context): Promise<void> {
       const stableOverrides = isCompare ? undefined : sessionOverrides;
       const stableStart = Date.now();
 
-      const response = await session.sendMessageStreaming(
+      const response = await activeSession.sendMessageStreaming(
         message,
         username,
         userId,
@@ -221,12 +243,18 @@ export async function handleText(ctx: Context): Promise<void> {
       }
 
       // Retry on Claude Code crash (not user cancellation)
-      if (isClaudeCodeCrash && attempt < MAX_RETRIES) {
-        console.log(
-          `Claude Code crashed, retrying (attempt ${attempt + 2}/${MAX_RETRIES + 1})...`
-        );
-        await session.kill(); // Clear corrupted session
-        await ctx.reply(`⚠️ Claude crashed, retrying...`);
+      const isSessionNotFound = errorStr.includes("No conversation found with session ID");
+      if ((isClaudeCodeCrash || isSessionNotFound) && attempt < MAX_RETRIES) {
+        if (isSessionNotFound) {
+          console.log(`Session expired, starting new session (attempt ${attempt + 2}/${MAX_RETRIES + 1})...`);
+          await activeSession.kill();
+        } else {
+          console.log(
+            `Claude Code crashed, retrying (attempt ${attempt + 2}/${MAX_RETRIES + 1})...`
+          );
+          await activeSession.kill(); // Clear corrupted session
+          await ctx.reply(`⚠️ Claude crashed, retrying...`);
+        }
         // Reset state for retry
         state = new StreamingState();
         state.quietMode = QUIET_MODE;
@@ -241,7 +269,7 @@ export async function handleText(ctx: Context): Promise<void> {
       // Check if it was a cancellation
       if (errorStr.includes("abort") || errorStr.includes("cancel")) {
         // Only show "Query stopped" if it was an explicit stop, not an interrupt from a new message
-        const wasInterrupt = session.consumeInterruptFlag();
+        const wasInterrupt = activeSession.consumeInterruptFlag();
         if (!wasInterrupt) {
           await ctx.reply("🛑 Query stopped.");
         }

@@ -38,7 +38,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
   }
 
   // 1. Authorization check
-  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS)) {
+  if (!isAuthorizedInChat(userId, ctx.chat?.type, ALLOWED_USERS, ctx.chat?.id)) {
     await ctx.reply("Unauthorized. Contact the bot owner for access.");
     return;
   }

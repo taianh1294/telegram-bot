@@ -7,8 +7,8 @@
  *
  * Trong private chat (1-1), filter này không áp dụng — flow auth gốc tiếp tục.
  *
- * Group chat KHÔNG bị check allowlist (member group nào cũng dùng được nếu họ
- * tag/reply bot).
+ * Group chat còn phải qua auth ở handler: user_id phải nằm trong
+ * TELEGRAM_ALLOWED_USERS và chat_id phải nằm trong TELEGRAM_ALLOWED_GROUPS.
  */
 
 import type { Context, NextFunction } from "grammy";

@@ -6,7 +6,7 @@
 
 import { Bot } from "grammy";
 import { run, sequentialize } from "@grammyjs/runner";
-import { TELEGRAM_TOKEN, WORKING_DIR, ALLOWED_USERS, RESTART_FILE } from "./config";
+import { TELEGRAM_TOKEN, WORKING_DIR, ALLOWED_USERS, ALLOWED_GROUPS, RESTART_FILE } from "./config";
 import { unlinkSync, readFileSync, existsSync } from "fs";
 import { session } from "./session";
 import {
@@ -118,6 +118,7 @@ console.log("Claude Telegram Bot - TypeScript Edition");
 console.log("=".repeat(50));
 console.log(`Working directory: ${WORKING_DIR}`);
 console.log(`Allowed users: ${ALLOWED_USERS.length}`);
+console.log(`Allowed groups: ${ALLOWED_GROUPS.length}`);
 console.log("Starting bot...");
 
 // Get bot info first

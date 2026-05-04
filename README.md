@@ -99,6 +99,7 @@ Create `.env` with your settings:
 # Required
 TELEGRAM_BOT_TOKEN=1234567890:ABC-DEF...   # From @BotFather
 TELEGRAM_ALLOWED_USERS=123456789           # Your Telegram user ID
+TELEGRAM_ALLOWED_GROUPS=-1001234567890     # Optional: trusted group chat IDs
 
 # Recommended
 CLAUDE_WORKING_DIR=/path/to/your/folder    # Where Claude runs (loads CLAUDE.md, skills, MCP)

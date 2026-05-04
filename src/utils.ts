@@ -306,26 +306,40 @@ let sessionModule: {
   };
 } | null = null;
 
-export async function checkInterrupt(text: string): Promise<string> {
+type InterruptibleSession = {
+  isRunning: boolean;
+  stop: () => Promise<"stopped" | "pending" | false>;
+  markInterrupt: () => void;
+  clearStopRequested: () => void;
+};
+
+export async function checkInterrupt(
+  text: string,
+  targetSession?: InterruptibleSession
+): Promise<string> {
   if (!text || !text.startsWith("!")) {
     return text;
   }
 
-  // Lazy import to avoid circular dependency
-  if (!sessionModule) {
-    sessionModule = await import("./session");
+  let interruptSession = targetSession;
+  if (!interruptSession) {
+    // Lazy import to avoid circular dependency
+    if (!sessionModule) {
+      sessionModule = await import("./session");
+    }
+    interruptSession = sessionModule.session;
   }
 
   const strippedText = text.slice(1).trimStart();
   const normalizedInterrupt = strippedText.trim().toLowerCase();
 
-  if (sessionModule.session.isRunning) {
+  if (interruptSession.isRunning) {
     console.log("! prefix - interrupting current query");
-    sessionModule.session.markInterrupt();
-    await sessionModule.session.stop();
+    interruptSession.markInterrupt();
+    await interruptSession.stop();
     await Bun.sleep(100);
     // Clear stopRequested so the new message can proceed
-    sessionModule.session.clearStopRequested();
+    interruptSession.clearStopRequested();
   }
 
   // Treat !stop as a pure stop alias (same behavior as /stop):

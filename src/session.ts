@@ -211,7 +211,7 @@ class ClaudeSession {
 
     // Build SDK V1 options - supports all features
     const options: Options = {
-      model: overrides?.model || "claude-opus-4-7",
+      model: overrides?.model || "cc/claude-opus-4-7",
       cwd: WORKING_DIR,
       settingSources: ["user", "project"],
       permissionMode: "bypassPermissions",
@@ -613,3 +613,21 @@ class ClaudeSession {
 
 // Global session instance
 export const session = new ClaudeSession();
+
+const sessionsByChat = new Map<string, ClaudeSession>();
+
+export function getSessionForChat(
+  chatId?: number,
+  chatType?: string
+): ClaudeSession {
+  if (chatType !== "group" && chatType !== "supergroup") return session;
+  if (!chatId) return session;
+
+  const key = String(chatId);
+  let chatSession = sessionsByChat.get(key);
+  if (!chatSession) {
+    chatSession = new ClaudeSession();
+    sessionsByChat.set(key, chatSession);
+  }
+  return chatSession;
+}
