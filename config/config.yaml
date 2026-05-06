@@ -3,13 +3,13 @@ mode: stable
 
 stable:
   system_prompt_file: "CLAUDE.md"
-  model: "cc/claude-opus-4-7"
+  model: "cc/claude-sonnet-4-6"
 
 beta:
   trigger_prefix: "/beta"
   tag_reply: true
   system_prompt_file: "agents/ceo.md"
-  model: "cc/claude-opus-4-7"
+  model: "cc/claude-sonnet-4-6"
 
 compare:
   enabled: false

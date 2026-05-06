@@ -211,7 +211,7 @@ class ClaudeSession {
 
     // Build SDK V1 options - supports all features
     const options: Options = {
-      model: overrides?.model || "cc/claude-opus-4-7",
+      model: overrides?.model || "cc/claude-sonnet-4-6",
       cwd: WORKING_DIR,
       settingSources: ["user", "project"],
       permissionMode: "bypassPermissions",

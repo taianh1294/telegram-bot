@@ -126,7 +126,7 @@ export async function handleText(ctx: Context): Promise<void> {
         input: message,
         action: routing?.action ?? "parse_failed",
         dept: routing?.dept ?? null,
-        model_used: "cc/claude-opus-4-7",
+        model_used: "cc/claude-sonnet-4-6",
         success: routing !== null,
       });
 

@@ -42,6 +42,8 @@ export interface Schedule {
   trigger_keywords?: string[]; // keywords that manually fire this schedule (case-insensitive)
   notify_chats?: number[];     // gửi đến nhiều chat (bổ sung hoặc thay thế chat_id khi schedule tự trigger)
   next_run: string;         // ISO UTC string
+  cooldown_until?: string | null; // ISO UTC string; skip retries until this time after transient failures
+  last_error?: string | null;
   recurrence?: Recurrence;  // absent = one-time
   enabled: boolean;
   created_at: string;
@@ -166,6 +168,8 @@ function getTimezoneOffset(tz: string, utcDate: Date): number {
 
 let schedulerInterval: ReturnType<typeof setInterval> | null = null;
 let tickRunning = false;
+let claudeCooldownUntil = 0;
+const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 
 /** Lấy giờ phút hiện tại theo timezone, dạng số phút từ 00:00 */
 function localMinutes(tz: string): number {
@@ -291,6 +295,51 @@ function shouldFireOnStartup(schedule: Schedule): boolean {
   return true;
 }
 
+function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function rateLimitCooldownMs(e: unknown): number | null {
+  const text = errorText(e);
+  if (!/\b429\b|rate_limit_error|rate limit/i.test(text)) return null;
+
+  const reset = text.match(/reset after\s+((?:(\d+)m)?\s*(?:(\d+)s)?)/i);
+  if (!reset) return DEFAULT_RATE_LIMIT_COOLDOWN_MS;
+
+  const minutes = Number(reset[2] || 0);
+  const seconds = Number(reset[3] || 0);
+  const parsed = (minutes * 60 + seconds) * 1000;
+  return Math.max(parsed, 60_000);
+}
+
+function isInCooldown(schedule: Schedule, now: Date): boolean {
+  if (!schedule.cooldown_until) return false;
+  const until = new Date(schedule.cooldown_until).getTime();
+  if (!Number.isFinite(until) || until <= now.getTime()) {
+    schedule.cooldown_until = null;
+    schedule.last_error = null;
+    return false;
+  }
+  return true;
+}
+
+function applyFailureCooldown(schedule: Schedule, e: unknown, now: Date): boolean {
+  const cooldownMs = rateLimitCooldownMs(e);
+  schedule.last_error = errorText(e).slice(0, 500);
+  if (cooldownMs === null) return false;
+
+  const until = new Date(now.getTime() + cooldownMs);
+  schedule.cooldown_until = until.toISOString();
+  claudeCooldownUntil = Math.max(claudeCooldownUntil, until.getTime());
+  console.warn(`[scheduler] Rate limited. Cooling down Claude jobs until ${schedule.cooldown_until}`);
+  return true;
+}
+
+function clearScheduleFailure(schedule: Schedule): void {
+  schedule.cooldown_until = null;
+  schedule.last_error = null;
+}
+
 export function startScheduler(botApi: Api): void {
   const dataDir = resolve(WORKING_DIR, "data");
   if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
@@ -393,6 +442,10 @@ async function tickScheduler(botApi: Api): Promise<void> {
 
   for (const schedule of data.schedules) {
     if (!schedule.enabled) continue;
+    if (isInCooldown(schedule, now)) {
+      changed = true;
+      continue;
+    }
 
     // startup_daily: kiểm tra khung giờ và chưa gửi hôm nay
     const isStartupDaily = schedule.recurrence?.type === "startup_daily";
@@ -410,6 +463,12 @@ async function tickScheduler(botApi: Api): Promise<void> {
 
     try {
       if (schedule.claude_query) {
+        if (claudeCooldownUntil > now.getTime()) {
+          schedule.cooldown_until = new Date(claudeCooldownUntil).toISOString();
+          changed = true;
+          continue;
+        }
+
         // Báo đang xử lý tới tất cả chat trước
         for (const cid of targetChats) {
           await botApi.sendMessage(cid, `⏳ Đang tổng hợp <b>${schedule.name}</b>...`, { parse_mode: "HTML" });
@@ -423,8 +482,13 @@ async function tickScheduler(botApi: Api): Promise<void> {
         console.log(`[scheduler] Fired: "${schedule.name}" → ${targetChats.join(", ")}`);
       }
       schedule.last_run = now.toISOString();
+      clearScheduleFailure(schedule);
     } catch (e) {
       console.error(`[scheduler] Failed to fire "${schedule.name}":`, e);
+      if (applyFailureCooldown(schedule, e, now)) {
+        changed = true;
+        break;
+      }
     }
 
     if (!isStartupDaily && schedule.recurrence) {
@@ -468,6 +532,17 @@ export async function runScheduleNow(botApi: Api, scheduleId: string, overrideCh
 
   const targetChatId = overrideChatId ?? schedule.chat_id;
   const now = new Date();
+  if (isInCooldown(schedule, now) || claudeCooldownUntil > now.getTime()) {
+    const until = schedule.cooldown_until ?? new Date(claudeCooldownUntil).toISOString();
+    try {
+      await botApi.sendMessage(targetChatId, `⏸️ Lịch <b>${schedule.name}</b> đang tạm dừng do rate limit. Thử lại sau ${new Date(until).toLocaleTimeString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })}.`, { parse_mode: "HTML" });
+    } catch {
+      // ignore notification error
+    }
+    saveSchedules(data);
+    return false;
+  }
+
   try {
     if (schedule.claude_query) {
       await botApi.sendMessage(targetChatId, `⏳ Đang tổng hợp <b>${schedule.name}</b>...`, { parse_mode: "HTML" });
@@ -478,10 +553,13 @@ export async function runScheduleNow(botApi: Api, scheduleId: string, overrideCh
       await sendTextToChat(botApi, targetChatId, schedule.message);
     }
     schedule.last_run = now.toISOString();
+    clearScheduleFailure(schedule);
     saveSchedules(data);
     return true;
   } catch (e) {
     console.error(`[scheduler] Manual fire failed "${schedule.name}":`, e);
+    applyFailureCooldown(schedule, e, now);
+    saveSchedules(data);
     try {
       await botApi.sendMessage(targetChatId, `❌ Lỗi khi tổng hợp <b>${schedule.name}</b>: ${String(e).slice(0, 200)}`, { parse_mode: "HTML" });
     } catch {

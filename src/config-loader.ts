@@ -161,7 +161,7 @@ export async function runCeoRoutingQuery(
   const parts: string[] = [];
   const systemPrompt = getBetaSystemPrompt();
   const cfg = loadConfig().beta as Record<string, unknown>;
-  const model = (cfg?.model as string) || "cc/claude-opus-4-7";
+  const model = (cfg?.model as string) || "cc/claude-sonnet-4-6";
 
   const routingPrompt = `Route the following request. Return ONLY valid JSON, no explanation.\n\nRequest: ${message}`;
 
@@ -203,7 +203,7 @@ export async function runSilentBetaQuery(
   const responseParts: string[] = [];
   const systemPrompt = getBetaSystemPrompt();
   const cfg = loadConfig().beta as Record<string, unknown>;
-  const model = (cfg?.model as string) || "cc/claude-opus-4-7";
+  const model = (cfg?.model as string) || "cc/claude-sonnet-4-6";
 
   const options: Options = {
     model,
