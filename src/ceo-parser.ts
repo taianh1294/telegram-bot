@@ -72,4 +72,5 @@ export const DEPT_LABELS: Record<string, string> = {
   pm: "PM 📋",
   van_hanh: "Vận Hành ⚙️",
   tham_dinh: "Thẩm Định 🔍",
+  phap_che: "Pháp Chế ⚖️",
 };

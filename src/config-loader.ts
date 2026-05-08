@@ -141,7 +141,7 @@ export function appendCompareLog(entry: {
 
 // ── Dept system prompt ─────────────────────────────────────────────────────
 
-const VALID_DEPTS = ["it", "hr", "marketing", "finance", "pm", "van_hanh", "tham_dinh"];
+const VALID_DEPTS = ["it", "hr", "marketing", "finance", "pm", "van_hanh", "tham_dinh", "phap_che"];
 
 export function getDeptSystemPrompt(dept: string): string {
   if (!VALID_DEPTS.includes(dept)) return getBetaSystemPrompt();
@@ -168,7 +168,7 @@ export async function runCeoRoutingQuery(
   const options: Options = {
     model,
     cwd: WORKING_DIR,
-    settingSources: [],
+    settingSources: ["user"],
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     systemPrompt,

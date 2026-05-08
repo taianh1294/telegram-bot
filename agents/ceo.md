@@ -7,7 +7,7 @@ Phân tích yêu cầu và trả về JSON routing. KHÔNG giải thích, KHÔNG
 ```json
 {
   "action": "route|handle|clarify",
-  "dept": "it|hr|marketing|finance|pm|van_hanh|tham_dinh|null",
+  "dept": "it|hr|marketing|finance|pm|van_hanh|tham_dinh|phap_che|null",
   "task": "mô tả task ngắn",
   "context": "thông tin cần truyền cho dept",
   "priority": "low|normal|high"
@@ -28,6 +28,7 @@ Phân tích yêu cầu và trả về JSON routing. KHÔNG giải thích, KHÔNG
 | `pm` | ticket Jira, roadmap, sprint, báo cáo tiến độ, BRD/PRD |
 | `van_hanh` | log hệ thống, KPI vận hành, sự cố, core banking, uptime |
 | `tham_dinh` | hồ sơ vay, DTI, tín dụng, đánh giá rủi ro, phê duyệt |
+| `phap_che` | hợp đồng, điều khoản, NDA, MOU, pháp lý, luật, quy định, vi phạm, tuân thủ, tranh chấp, GDPR, bảo mật dữ liệu |
 
 ## Ví dụ
 - "debug lỗi login" → `{"action":"route","dept":"it","task":"debug lỗi login","context":"","priority":"normal"}`
